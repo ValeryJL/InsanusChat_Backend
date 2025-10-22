@@ -38,7 +38,10 @@ class UserModel(BaseModel):
     class Config:
         allow_population_by_field_name = True
         arbitrary_types_allowed = True
-        json_encoders = {ObjectId: str}
+        json_encoders = {
+            ObjectId: str, 
+            datetime: lambda v: v.isoformat()
+        }
         schema_extra = {
             "example": {
                 "firebase_id": "firebase_uid_12345",
@@ -56,6 +59,7 @@ class MessageModel(BaseModel):
     """
     message_id: PyObjectId = Field(default_factory=PyObjectId, alias="_id", description="ID único del mensaje.")
     parent_id: Optional[PyObjectId] = Field(None, description="ID del mensaje padre, nulo si es el primer mensaje del hilo.")
+    children_ids: List[PyObjectId] = Field([], description="IDs de los mensajes hijos que responden a este.")
     sender_id: str = Field(..., description="ID del remitente (ID de Firebase para el usuario, 'AI' o 'SYSTEM').")
     content: str = Field(..., description="Contenido del texto del mensaje.")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Marca de tiempo del mensaje.")
@@ -71,6 +75,7 @@ class MessageModel(BaseModel):
         schema_extra = {
             "example": {
                 "parent_id": None,
+                "children_ids":[],
                 "sender_id": "firebase_uid_12345",
                 "content": "¿Cómo puedo empezar a programar con FastAPI?",
             }
@@ -91,7 +96,10 @@ class ChatModel(BaseModel):
     class Config:
         allow_population_by_field_name = True
         arbitrary_types_allowed = True
-        json_encoders = {PyObjectId: str}
+        json_encoders = {
+            PyObjectId: str, 
+            datetime: lambda v: v.isoformat()
+        }
         schema_extra = {
             "example": {
                 "user_id": "firebase_uid_12345",
