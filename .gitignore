@@ -1,0 +1,7 @@
+(# Environment file - keep secrets out of VCS)
+.env
+
+.venv/
+__pycache__/
+*.py[cod]
+

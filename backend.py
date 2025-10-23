@@ -1,8 +1,13 @@
 import uvicorn
+import os
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from routers import users
 import database
+
+# Cargar .env automáticamente (si existe) para poblar os.environ
+load_dotenv()
 
 # --- 1. CONTEXT MANAGER PARA EL CICLO DE VIDA ---
 # FastAPI (versión > 0.100.0) recomienda usar context managers

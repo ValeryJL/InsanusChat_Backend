@@ -17,8 +17,9 @@ class PyObjectId(ObjectId):
         return ObjectId(v)
 
     @classmethod
-    def __modify_schema__(cls, field_schema):
-        field_schema.update(type='string')
+    def __get_pydantic_json_schema__(cls, core_schema, **_):
+        """Compatibilidad con Pydantic v2: representar ObjectId como string en el JSON schema."""
+        return {"type": "string"}
 
 
 # 2. Modelo de Usuario (Colección 'users')
@@ -35,20 +36,22 @@ class UserModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Fecha y hora de creación del usuario.")
     last_login: datetime = Field(default_factory=datetime.utcnow, description="Fecha y hora del último inicio de sesión.")
 
-    class Config:
-        allow_population_by_field_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {
+    # Configuración compatible con Pydantic v2
+    model_config = {
+        "populate_by_name": True,
+        "arbitrary_types_allowed": True,
+        "json_encoders": {
             PyObjectId: str,
             datetime: lambda v: v.isoformat()
-        }
-        schema_extra = {
+        },
+        "json_schema_extra": {
             "example": {
                 "firebase_id": "firebase_uid_12345",
                 "email": "usuario@ejemplo.com",
                 "display_name": "Valeria Developer",
             }
         }
+    }
 
 
 # 3. Modelo de Mensaje para la conversación (Usado en la colección 'chats')
@@ -65,14 +68,15 @@ class MessageModel(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Marca de tiempo del mensaje.")
     is_deleted: bool = Field(False, description="Indica si el mensaje ha sido borrado.")
 
-    class Config:
-        allow_population_by_field_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {
+    # Configuración compatible con Pydantic v2
+    model_config = {
+        "populate_by_name": True,
+        "arbitrary_types_allowed": True,
+        "json_encoders": {
             PyObjectId: str,
             datetime: lambda v: v.isoformat()
-        }
-        schema_extra = {
+        },
+        "json_schema_extra": {
             "example": {
                 "parent_id": None,
                 "children_ids":[],
@@ -80,6 +84,7 @@ class MessageModel(BaseModel):
                 "content": "¿Cómo puedo empezar a programar con FastAPI?",
             }
         }
+    }
 
 # 4. Modelo de Chat/Conversación (Colección 'chats')
 class ChatModel(BaseModel):
@@ -93,20 +98,22 @@ class ChatModel(BaseModel):
     # Los mensajes se almacenan como sub-documentos en la misma colección (colección 'chats')
     messages: List[MessageModel] = Field([], description="Lista de todos los mensajes en el hilo principal y sus ramificaciones.")
 
-    class Config:
-        allow_population_by_field_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {
-            PyObjectId: str, 
+    # Configuración compatible con Pydantic v2
+    model_config = {
+        "populate_by_name": True,
+        "arbitrary_types_allowed": True,
+        "json_encoders": {
+            PyObjectId: str,
             datetime: lambda v: v.isoformat()
-        }
-        schema_extra = {
+        },
+        "json_schema_extra": {
             "example": {
                 "user_id": "firebase_uid_12345",
                 "title": "Introducción a FastAPI y MongoDB",
                 "messages": [],
             }
         }
+    }
 
 # Modelo de Respuesta (para API)
 class ResponseModel(BaseModel):
