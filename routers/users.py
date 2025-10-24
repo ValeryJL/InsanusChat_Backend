@@ -4,6 +4,8 @@ import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
 from fastapi import APIRouter, HTTPException
 from models import UserModel, ResponseModel
+from pydantic import BaseModel, EmailStr
+import logging
 
 load_dotenv()
 
@@ -22,25 +24,34 @@ if not firebase_admin._apps:
     cred = credentials.Certificate(service_account_path)
     firebase_admin.initialize_app(cred)
 
+# Nuevo DTO para creación (no requiere firebase_id)
+class CreateUserRequest(BaseModel):
+    email: EmailStr
+    password: str | None = None
+    display_name: str | None = None
+
 # 2. Definir una nueva ruta (endpoint)
 @router.post("/", response_model=ResponseModel)
-async def create_new_user(user_data: UserModel):
+async def create_new_user(user_data: CreateUserRequest):
     """
     Crea un nuevo usuario en Firebase Authentication usando Admin SDK.
-    Espera que UserModel tenga al menos 'email' y opcionalmente 'password' y 'display_name'.
+    Espera email y opcionales password y display_name.
     """
     try:
-        password = getattr(user_data, "password", None)
+        password = user_data.password
         created = firebase_auth.create_user(
             email=user_data.email,
             password=password,
-            display_name=getattr(user_data, "display_name", None),
+            display_name=user_data.display_name,
         )
         return ResponseModel(message="Usuario creado en Firebase", data={"uid": created.uid, "email": created.email})
-    except firebase_auth.EmailAlreadyExistsError:
-        raise HTTPException(status_code=400, detail="El email ya existe")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        msg = str(e)
+        # detectar error de email ya existente y devolver 400
+        if "email" in msg and "already exists" in msg:
+            raise HTTPException(status_code=400, detail="El email ya existe")
+        logging.exception("Error creando usuario en Firebase")
+        raise HTTPException(status_code=500, detail=msg)
 
 # 3. Definir otra ruta
 @router.get("/{user_id}", response_model=UserModel)
