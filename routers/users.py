@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from models import UserModel, ResponseModel
 from pydantic import BaseModel, EmailStr
 import logging
@@ -53,14 +53,25 @@ async def create_new_user(user_data: CreateUserRequest):
         logging.exception("Error creando usuario en Firebase")
         raise HTTPException(status_code=500, detail=msg)
 
-# 3. Definir otra ruta
-@router.get("/{user_id}", response_model=UserModel)
-async def get_user_profile(user_id: str):
+@router.get("/me", response_model=UserModel)
+async def get_my_profile(authorization: str | None = Header(None)):
     """
-    Obtiene el perfil de un usuario por su ID de Firebase.
+    Devuelve el perfil del usuario autenticado por ID token (Authorization: Bearer <token>).
     """
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Token no provisto")
+    token = authorization.split(" ", 1)[1]
     try:
-        u = firebase_auth.get_user(user_id)
+        decoded = firebase_auth.verify_id_token(token)
+        uid = decoded.get("uid")
+        if not uid:
+            raise HTTPException(status_code=401, detail="Token inválido")
+        u = firebase_auth.get_user(uid)
         return {"firebase_id": u.uid, "email": u.email, "display_name": u.display_name}
+    except firebase_auth.InvalidIdTokenError:
+        raise HTTPException(status_code=401, detail="ID token inválido")
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        logging.exception("Error verificando token o recuperando usuario")
+        raise HTTPException(status_code=401, detail=str(e))
+
+
