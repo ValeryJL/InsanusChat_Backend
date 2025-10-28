@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
     logging.info("--- 🛑 Cerrando FastAPI y desconectando de MongoDB... ---")
     # Dejar que la función de cierre gestione y lance excepciones si ocurren.
     # El handler global (registrado en la app) convertirá errores de DB en respuestas 503
-    database.close_mongo_connection()
+    await database.close_mongo_connection()
 
 # --- 2. INSTANCIA DE LA APLICACIÓN FASTAPI ---
 # La variable 'app' debe coincidir con el Start Command de Render: uvicorn backend:app

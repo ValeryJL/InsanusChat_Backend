@@ -1,25 +1,31 @@
 from typing import List, Optional, Literal, Dict, Any
 from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr
+from pydantic_core import PydanticCustomError, core_schema
 from bson import ObjectId
 
 # -------------------------------------------------
 # Helper: PyObjectId (compatible con Pydantic v2)
 # -------------------------------------------------
-class PyObjectId(ObjectId):
+class PyObjectId:
+    """
+    Custom BSON ObjectId type for Pydantic v2.
+    Validates strings/ObjectId -> returns ObjectId instance.
+    Produces a JSON schema of string with 24-hex pattern.
+    """
     @classmethod
-    def __get_validators__(cls):
-        yield cls.validate
+    def __get_pydantic_core_schema__(cls, source, handler):
+        def validate(v):
+            if isinstance(v, ObjectId):
+                return v
+            if not ObjectId.is_valid(v):
+                raise PydanticCustomError("value_error.invalid_objectid", "Invalid ObjectId")
+            return ObjectId(v)
+        return core_schema.no_info_plain_validator_function(validate)
 
     @classmethod
-    def validate(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError('Invalid objectid')
-        return ObjectId(v)
-
-    @classmethod
-    def __get_pydantic_json_schema__(cls, core_schema, **_):
-        return {"type": "string"}
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        return {"type": "string", "pattern": "^[0-9a-fA-F]{24}$"}
 
 
 # -------------------------------------------------
@@ -179,3 +185,4 @@ class UserModel(BaseModel):
 class ResponseModel(BaseModel):
     """Modelo básico para respuestas HTTP."""
     message: str = "Operación exitosa"
+    data: Optional[Dict] = None

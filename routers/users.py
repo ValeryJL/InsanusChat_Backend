@@ -67,7 +67,7 @@ async def get_my_profile(authorization: str | None = Header(None)):
         if not uid:
             raise HTTPException(status_code=401, detail="Token inválido")
         u = firebase_auth.get_user(uid)
-        return {"firebase_id": u.uid, "email": u.email, "display_name": u.display_name}
+        return ResponseModel(message="Perfil recuperado", data={"firebase_id": u.uid, "email": u.email, "display_name": u.display_name})
     except firebase_auth.InvalidIdTokenError:
         raise HTTPException(status_code=401, detail="ID token inválido")
     except Exception as e:
