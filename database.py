@@ -7,12 +7,21 @@ from pymongo.errors import ConnectionFailure
 # Configuración de Logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Excepción personalizada para errores de inicialización de la base de datos
+class DatabaseNotInitializedError(Exception):
+    """Raised when the database client cannot be initialized or connected."""
+    pass
+
+class DatabaseConnectionError(Exception):
+    """Raised when there is a connection error with the database."""
+    pass
+
 # --- Variables Globales de Conexión ---
 # Estas variables se inicializarán en la función 'connect_to_mongo'
 # y serán utilizadas por el resto de la aplicación FastAPI.
 # Usamos 'client' para manejar la conexión y 'db' para la base de datos específica.
 # Definimos None como valor inicial para que puedan ser tipadas correctamente.
-client: AsyncIOMotorClient | None = None
+client = None
 db = None
 
 # --- Nombres de la Base de Datos y Colecciones ---
@@ -22,7 +31,7 @@ DATABASE_NAME = "insanus_chat"
 COLLECTION_USERS = "users"
 COLLECTION_CHATS = "chats"
 
-def connect_to_mongo():
+async def connect_to_mongo():
     """
     Función de inicialización que se ejecutará en el evento 'startup' de FastAPI.
     Establece la conexión asíncrona con MongoDB Atlas.
@@ -51,15 +60,15 @@ def connect_to_mongo():
 
         # Comprobar la conexión (opcional, pero útil)
         # Una simple operación de ping para verificar el acceso.
-        client.admin.command('ping')
+        await client.admin.command('ping')
         logging.info("Conexión con MongoDB Atlas establecida exitosamente.")
         
     except ConnectionFailure as e:
         logging.error(f"ERROR DE CONEXIÓN A MONGODB: No se pudo conectar a la base de datos. Detalle: {e}")
-        sys.exit(1)
+        raise DatabaseConnectionError("No se pudo conectar a la base de datos.")
     except Exception as e:
         logging.error(f"ERROR inesperado al conectar a MongoDB: {e}")
-        sys.exit(1)
+        raise DatabaseConnectionError("Error inesperado al conectar a la base de datos.")
 
 
 def close_mongo_connection():
@@ -67,20 +76,22 @@ def close_mongo_connection():
     Función de cierre que se ejecutará en el evento 'shutdown' de FastAPI.
     Cierra la conexión con MongoDB.
     """
-    global client
+    global client,db
     if client:
         client.close()
         logging.info("Conexión con MongoDB Atlas cerrada.")
+        client = None
+        db = None
 
 # Funciones de utilidad para obtener las colecciones (opcional, pero limpio)
 def get_user_collection():
     """Devuelve la colección de usuarios."""
     if db is None:
-        raise Exception("Database client is not initialized.")
+        raise DatabaseNotInitializedError("Database client is not initialized.")
     return db[COLLECTION_USERS]
 
 def get_chat_collection():
     """Devuelve la colección de chats."""
     if db is None:
-        raise Exception("Database client is not initialized.")
+        raise DatabaseNotInitializedError("Database client is not initialized.")
     return db[COLLECTION_CHATS]

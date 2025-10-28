@@ -1,7 +1,9 @@
 import uvicorn
 import os
+import logging
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from routers import users
 import database
@@ -19,14 +21,19 @@ async def lifespan(app: FastAPI):
     de la aplicación FastAPI.
     """
     # Lógica de Inicio (Startup)
-    print("--- 🚀 Iniciando FastAPI y conectando a MongoDB... ---")
-    database.connect_to_mongo()
+    logging.info("--- 🚀 Iniciando FastAPI y conectando a MongoDB... ---")
+    # Dejar que `connect_to_mongo` lance las excepciones específicas.
+    # Si falla en startup, es deseable que uvicorn/FastAPI detengan el arranque
+    # y muestren la traza completa para debugging.
+    await database.connect_to_mongo()
     
     # El 'yield' pausa la función y permite que la aplicación inicie
     yield
     
     # Lógica de Cierre (Shutdown)
-    print("--- 🛑 Cerrando FastAPI y desconectando de MongoDB... ---")
+    logging.info("--- 🛑 Cerrando FastAPI y desconectando de MongoDB... ---")
+    # Dejar que la función de cierre gestione y lance excepciones si ocurren.
+    # El handler global (registrado en la app) convertirá errores de DB en respuestas 503
     database.close_mongo_connection()
 
 # --- 2. INSTANCIA DE LA APLICACIÓN FASTAPI ---
@@ -37,6 +44,26 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan # Aplicamos el context manager
 )
+
+
+# Handler global: convertir DatabaseNotInitializedError -> HTTP 503
+@app.exception_handler(database.DatabaseNotInitializedError)
+async def db_not_initialized_exception_handler(request: Request, exc: database.DatabaseNotInitializedError):
+    logging.warning(f"Database not initialized: {exc}")
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "Database not ready, try again later"},
+    )
+
+
+# Handler global: convertir DatabaseConnectionError -> HTTP 503
+@app.exception_handler(database.DatabaseConnectionError)
+async def db_connection_exception_handler(request: Request, exc: database.DatabaseConnectionError):
+    logging.warning(f"Database connection error: {exc}")
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"detail": "Database connection error, try again later"},
+    )
 
 # --- 3. RUTAS PRINCIPALES Y DE SALUD ---
 
