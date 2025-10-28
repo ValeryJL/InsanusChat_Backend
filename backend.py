@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
-from routers import users
+from routers import auth, apikeys, agents, chats, tools
 import database
 
 # Cargar .env automáticamente (si existe) para poblar os.environ
@@ -73,7 +73,11 @@ async def root():
     return {"message": "InsanusChat Backend is running!"}
 
 
-app.include_router(users.router)
+app.include_router(auth.router)
+app.include_router(apikeys.router)
+app.include_router(agents.router)
+app.include_router(tools.router)    
+app.include_router(chats.router)
 
 # app.include_router(chats.router)
 
