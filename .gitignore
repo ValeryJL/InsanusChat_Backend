@@ -1,9 +1,10 @@
 (# Environment file - keep secrets out of VCS)
-.env
+.env*
+uvicorn.*
 
 .venv/
 .vscode/
 __pycache__/
 *.py[cod]
 secrets/
-
+scripts/

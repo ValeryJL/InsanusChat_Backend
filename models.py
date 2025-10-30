@@ -27,6 +27,26 @@ class PyObjectId:
     def __get_pydantic_json_schema__(cls, core_schema, handler):
         return {"type": "string", "pattern": "^[0-9a-fA-F]{24}$"}
 
+    @classmethod
+    def new(cls):
+        """Factory helper: devuelve un nuevo bson.ObjectId.
+
+        Útil para crear ids desde el código que prepara documentos para la DB
+        manteniendo coherencia con el tipo usado en los modelos Pydantic.
+        """
+        return ObjectId()
+
+    @classmethod
+    def parse(cls, v):
+        """Parsea una representación (str o ObjectId) a ObjectId.
+
+        Si `v` ya es un ObjectId lo devuelve tal cual, si es str intenta
+        convertirlo, y en caso de fallo propaga la excepción.
+        """
+        if isinstance(v, ObjectId):
+            return v
+        return ObjectId(str(v))
+
 
 # -------------------------------------------------
 # Sub-modelos
@@ -76,6 +96,45 @@ class MCPEntryModel(BaseModel):
         "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
     }
 
+
+class AgentSnippetModel(BaseModel):
+    """Snippet que puede inyectarse en el prompt del agente.
+
+    El campo `language` permite identificar si es JS/Python/texto; el backend puede
+    decidir cómo renderizar/ejecutar el snippet (por ahora se trata como texto).
+    """
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    name: str = Field(..., description="Nombre del snippet")
+    language: Literal["javascript", "python", "text"] = Field("javascript")
+    code: str = Field(..., description="Código o template del snippet")
+    type: Literal["template", "runtime"] = Field("runtime", description="Cómo será usado el snippet")
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    model_config = {
+        "populate_by_name": True,
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+    }
+
+class AgentModel(BaseModel):
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
+    name: str = Field(..., description="Nombre del agente")
+    description: Optional[str] = Field(None)
+    # `system_prompt` ahora es una secuencia de strings que pueden contener texto
+    # o referencias a snippets en el formato "SNIPPET:<snippet_id>". Ejemplo:
+    # ["You are a helpful assistant.", "SNIPPET:613f...", "Current date: {{now}}"]
+    system_prompt: List[str] = Field(default_factory=list, description="Secuencia para el system prompt: texto y/o referencias a snippets")
+    # snippets embebidos que pueden ser referenciados desde `system_prompt`.
+    snippets: List[AgentSnippetModel] = Field(default_factory=list)
+    spec: Dict[str, Any] = Field(default_factory=dict)  # configuración/plantilla adicional del agente
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    active: bool = Field(True)
+
+    model_config = {
+        "populate_by_name": True,
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+    }
 
 # -------------------------------------------------
 # Message & Chat models (colecciones separadas)
@@ -146,6 +205,7 @@ class UserModel(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_login: Optional[datetime] = None
 
+    agents: List[AgentModel] = Field(default_factory=list)
     mcps: List[MCPEntryModel] = Field(default_factory=list)
     code_snippets: List[CodeSnippetModel] = Field(default_factory=list)
     api_keys: List[UserAPIKeyModel] = Field(default_factory=list)

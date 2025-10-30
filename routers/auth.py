@@ -10,7 +10,7 @@ import logging
 from dotenv import load_dotenv, find_dotenv
 import database
 from datetime import datetime
-from bson import ObjectId
+# Evitamos importar directamente bson.ObjectId y usamos los helpers de models
 from pymongo import ReturnDocument
 
 # Cargar variables de entorno desde .env (busca en el proyecto)
@@ -56,8 +56,14 @@ def _serialize_doc(doc: dict) -> dict:
     if not doc:
         return doc
     out = dict(doc)
-    if "_id" in out and isinstance(out["_id"], ObjectId):
-        out["_id"] = str(out["_id"])
+    if "_id" in out:
+        try:
+            # Intentar parsear a ObjectId; si funciona, serializamos
+            parsed = PyObjectId.parse(out["_id"])
+            out["_id"] = str(parsed)
+        except Exception:
+            # si no es convertible, lo dejamos tal cual
+            pass
     for k, v in list(out.items()):
         if isinstance(v, datetime):
             out[k] = v.isoformat()
@@ -85,7 +91,7 @@ class AuthUserModel(BaseModel):
 # Nota: usamos `AuthUserModel` para respuestas y validación de DB.
 # Para las actualizaciones aceptamos un payload parcial (dict) con campos permitidos.
 
-@router.post("/verify", response_model=ResponseModel)
+@router.post("/", response_model=ResponseModel)
 async def verify_token(authorization: Optional[str] = Header(None)):
     """
     Verifica un ID token de Firebase (Authorization: Bearer <token>).
@@ -102,7 +108,7 @@ async def verify_token(authorization: Optional[str] = Header(None)):
         logging.exception("Error verificando token")
         raise HTTPException(status_code=401, detail=str(e))
     
-@router.get("/profile", response_model=ResponseModel)
+@router.get("/", response_model=ResponseModel)
 async def get_user_profile(uid: str | None = None, authorization: str | None = Header(None)):
     """
     Devuelve el perfil del usuario. Si se pasa `uid` devuelve ese usuario.
@@ -132,7 +138,7 @@ async def get_user_profile(uid: str | None = None, authorization: str | None = H
         logging.exception("Error recuperando usuario")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/profile", response_model=ResponseModel)
+@router.put("/", response_model=ResponseModel)
 async def update_user_profile(authorization: str | None = Header(None), payload: dict | None = None):
     """
     Actualiza (o crea) el perfil del usuario autenticado usando datos en la base de datos.
