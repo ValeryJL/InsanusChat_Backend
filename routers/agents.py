@@ -49,7 +49,7 @@ async def list_agents(authorization: str | None = Header(None)):
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
     decoded = auth.authenticate_token(token)
-    uid = decoded.get("uid")
+    uid = decoded.get("uid") or decoded.get("user_id")
     try:
         user_oid = PyObjectId.parse(uid)
     except Exception:
@@ -82,7 +82,7 @@ async def create_agent(authorization: str | None = Header(None), payload: dict =
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
     decoded = auth.authenticate_token(token)
-    uid = decoded.get("uid")
+    uid = decoded.get("uid") or decoded.get("user_id")
     try:
         user_oid = PyObjectId.parse(uid)
     except Exception:
@@ -136,7 +136,7 @@ async def update_agent(agent_id: str, authorization: str | None = Header(None), 
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
     decoded = auth.authenticate_token(token)
-    uid = decoded.get("uid")
+    uid = decoded.get("uid") or decoded.get("user_id")
     try:
         user_oid = PyObjectId.parse(uid)
     except Exception:
@@ -205,7 +205,7 @@ async def delete_agent(agent_id: str, authorization: str | None = Header(None)):
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
     decoded = auth.authenticate_token(token)
-    uid = decoded.get("uid")
+    uid = decoded.get("uid") or decoded.get("user_id")
     try:
         user_oid = PyObjectId.parse(uid)
     except Exception:
