@@ -5,6 +5,5 @@ pydantic==2.5.3                     # Validación y parsing de datos; modelos de
 pydantic[email]==2.5.3              # Extra de pydantic para validación/formato de emails (es un extra; puede ser redundante con la línea anterior)
 motor==3.3.2                        # Driver MongoDB asíncrono (usado con async/await para acceder a Mongo desde FastAPI)
 pymongo==4.7.3                      # Driver oficial de MongoDB (requerido por algunas librerías y por motor en partes)
-firebase-admin==6.1.0               # SDK administrador de Firebase (autenticación, Firestore/RTDB admin, envío de FCM)
 passlib[bcrypt]==1.7.0              # Biblioteca de hashing de contraseñas; el extra bcrypt proporciona un algoritmo seguro de hash
 python-jose[cryptography]==3.3.0    # Implementación JOSE/JWT para crear/verificar tokens JWT; usa cryptography para operaciones criptográficas

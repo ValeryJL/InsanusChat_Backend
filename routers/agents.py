@@ -50,9 +50,13 @@ async def list_agents(authorization: str | None = Header(None)):
     token = authorization.split(" ", 1)[1]
     decoded = auth.authenticate_token(token)
     uid = decoded.get("uid")
+    try:
+        user_oid = PyObjectId.parse(uid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="user id inválido")
 
     coll = database.get_user_collection()
-    user = await coll.find_one({"firebase_id": uid}, {"agents": 1})
+    user = await coll.find_one({"_id": user_oid}, {"agents": 1})
     agents = user.get("agents", []) if user else []
     # serializar ObjectId/datetime recursivamente
     out = [_sanitize_value(a) for a in agents]
@@ -79,6 +83,10 @@ async def create_agent(authorization: str | None = Header(None), payload: dict =
     token = authorization.split(" ", 1)[1]
     decoded = auth.authenticate_token(token)
     uid = decoded.get("uid")
+    try:
+        user_oid = PyObjectId.parse(uid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="user id inválido")
 
     name = payload.get("name")
     if not name:
@@ -109,7 +117,7 @@ async def create_agent(authorization: str | None = Header(None), payload: dict =
     }
 
     coll = database.get_user_collection()
-    res = await coll.update_one({"firebase_id": uid}, {"$push": {"agents": agent_doc}})
+    res = await coll.update_one({"_id": user_oid}, {"$push": {"agents": agent_doc}})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
@@ -129,6 +137,10 @@ async def update_agent(agent_id: str, authorization: str | None = Header(None), 
     token = authorization.split(" ", 1)[1]
     decoded = auth.authenticate_token(token)
     uid = decoded.get("uid")
+    try:
+        user_oid = PyObjectId.parse(uid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="user id inválido")
 
     try:
         oid = PyObjectId.parse(agent_id)
@@ -168,12 +180,12 @@ async def update_agent(agent_id: str, authorization: str | None = Header(None), 
         set_ops[f"agents.$[a].{k}"] = v
 
     coll = database.get_user_collection()
-    res = await coll.update_one({"firebase_id": uid}, {"$set": set_ops}, array_filters=[{"a._id": oid}])
+    res = await coll.update_one({"_id": user_oid}, {"$set": set_ops}, array_filters=[{"a._id": oid}])
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Agente no encontrado o no pertenece al usuario")
 
     # Recuperar el agente actualizado
-    user = await coll.find_one({"firebase_id": uid}, {"agents": 1})
+    user = await coll.find_one({"_id": user_oid}, {"agents": 1})
     agent = None
     for a in user.get("agents", []):
         if str(a.get("_id")) == str(oid):
@@ -194,6 +206,10 @@ async def delete_agent(agent_id: str, authorization: str | None = Header(None)):
     token = authorization.split(" ", 1)[1]
     decoded = auth.authenticate_token(token)
     uid = decoded.get("uid")
+    try:
+        user_oid = PyObjectId.parse(uid)
+    except Exception:
+        raise HTTPException(status_code=400, detail="user id inválido")
 
     try:
         oid = PyObjectId.parse(agent_id)
@@ -201,7 +217,7 @@ async def delete_agent(agent_id: str, authorization: str | None = Header(None)):
         raise HTTPException(status_code=400, detail="agent_id inválido")
 
     coll = database.get_user_collection()
-    res = await coll.update_one({"firebase_id": uid}, {"$pull": {"agents": {"_id": oid}}})
+    res = await coll.update_one({"_id": user_oid}, {"$pull": {"agents": {"_id": oid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="Agente no encontrado")
     return {"message": "Agente eliminado", "data": {"id": agent_id}}

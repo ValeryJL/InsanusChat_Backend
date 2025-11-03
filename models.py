@@ -199,8 +199,9 @@ class ChatModel(BaseModel):
 # Modelo principal de Usuario
 # -------------------------------------------------
 class UserModel(BaseModel):
-    firebase_id: str = Field(..., description="ID único del usuario proporcionado por Firebase Auth.")
-    email: EmailStr = Field(...)
+    id: PyObjectId = Field(default_factory=PyObjectId, alias="_id", description="Identificador MongoDB")
+    email: EmailStr = Field(..., description="Correo electrónico del usuario")
+    password_hash: Optional[str] = Field(None, repr=False, description="Hash bcrypt de la contraseña local (no almacenar contraseñas en texto)")
     display_name: Optional[str] = Field(None, max_length=100)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_login: Optional[datetime] = None

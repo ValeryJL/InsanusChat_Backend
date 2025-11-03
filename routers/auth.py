@@ -1,27 +1,21 @@
 import os
 from typing import Any, Optional, List, Dict 
 from dotenv import load_dotenv
-import firebase_admin
-from firebase_admin import credentials, auth as firebase_auth
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Body
 from models import PyObjectId, UserModel, ResponseModel
 from pydantic import BaseModel, EmailStr, Field
 import logging
 from dotenv import load_dotenv, find_dotenv
 import database
 from datetime import datetime
-# Evitamos importar directamente bson.ObjectId y usamos los helpers de models
 from pymongo import ReturnDocument
+from auth.auth import verify_password, create_access_token, decode_access_token, get_password_hash
+import re
 
 # Cargar variables de entorno desde .env (busca en el proyecto)
 load_dotenv(find_dotenv())
 
-# Avisar en dev si no se cargó la variable esperada
-if not os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH"):
-    logging.warning(
-        "FIREBASE_SERVICE_ACCOUNT_PATH no encontrado en el entorno. "
-        "Asegúrate de tener un .env con esa variable o exportarla."
-    )
+# Cargamos .env para obtener claves locales si están definidas
 
 # 1. Crear una instancia de APIRouter
 router = APIRouter(
@@ -29,26 +23,24 @@ router = APIRouter(
     tags=["Usuarios"],       # Etiqueta para agrupar en la documentación
 )
 
-service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
-if not service_account_path:
-    # en dev lanzar error temprano para que lo configures
-    raise RuntimeError("FIREBASE_SERVICE_ACCOUNT_PATH no está definido en .env")
-
-if not firebase_admin._apps:
-    cred = credentials.Certificate(service_account_path)
-    firebase_admin.initialize_app(cred)
-
 def authenticate_token(token: str):
-    """Verifica el ID token con Firebase y devuelve el payload decodificado.
+    """Intentar verificar un token local (JWT) y si falla, verificar con Firebase.
+    Devuelve un dict normalizado: {"auth_type": "local"|"firebase", "user_id": str, "payload": {...}}
+    Lanzará HTTPException(401) si ninguno es válido.
+    """
+    """Verifica un token local JWT y devuelve un dict normalizado.
+    Devuelve: {"auth_type": "local", "user_id": str, "uid": str, "payload": {...}}
     Lanzará HTTPException(401) si el token no es válido.
     """
     try:
-        decoded = firebase_auth.verify_id_token(token)
-        return decoded
-    except firebase_auth.InvalidIdTokenError:
-        raise HTTPException(status_code=401, detail="ID token inválido")
+        payload = decode_access_token(token)
+        sub = payload.get("sub")
+        if not sub:
+            raise HTTPException(status_code=401, detail="Token inválido: sin 'sub'")
+        # Devolver 'uid' por compatibilidad con código existente
+        return { "auth_type": "local", "user_id": str(sub), "uid": str(sub), "payload": payload}
     except Exception as e:
-        logging.exception("Error verificando token")
+        logging.exception("Error verificando token local")
         raise HTTPException(status_code=401, detail=str(e))
 
 
@@ -73,7 +65,7 @@ class AuthUserModel(BaseModel):
     """
     Versión ligera del usuario usada por endpoints de autenticación (no incluye mcps, chats, api_keys, agents).
     """
-    firebase_id: str
+    id: PyObjectId = Field(alias="_id")
     email: EmailStr
     display_name: Optional[str] = None
     created_at: datetime
@@ -94,44 +86,49 @@ class AuthUserModel(BaseModel):
 @router.post("/", response_model=ResponseModel)
 async def verify_token(authorization: Optional[str] = Header(None)):
     """
-    Verifica un ID token de Firebase (Authorization: Bearer <token>).
+    Verifica un token local (Authorization: Bearer <token>). Devuelve payload decodificado.
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
     try:
-        decoded = firebase_auth.verify_id_token(token)
-        return ResponseModel(message="Token verificado", data=decoded)
-    except firebase_auth.InvalidIdTokenError:
-        raise HTTPException(status_code=401, detail="ID token inválido")
+        decoded = authenticate_token(token)
+        # asegurar compatibilidad: exponer tanto "uid" como "user_id"
+        data = dict(decoded)
+        if "uid" in data and "user_id" not in data:
+            data["user_id"] = data["uid"]
+        return ResponseModel(message="Token verificado", data=data)
+    except HTTPException:
+        raise
     except Exception as e:
         logging.exception("Error verificando token")
         raise HTTPException(status_code=401, detail=str(e))
     
 @router.get("/", response_model=ResponseModel)
-async def get_user_profile(uid: str | None = None, authorization: str | None = Header(None)):
+async def get_user_profile(authorization: str | None = Header(None)):
     """
     Devuelve el perfil del usuario. Si se pasa `uid` devuelve ese usuario.
     Si no se pasa `uid`, requiere Authorization y devuelve el perfil del usuario autenticado.
     """
     try:
         coll = database.get_user_collection()
-        if uid:
-            user_doc = await coll.find_one({"firebase_id": uid})
-        else:
-            if not authorization or not authorization.startswith("Bearer "):
-                raise HTTPException(status_code=401, detail="Token no provisto")
-            token = authorization.split(" ", 1)[1]
-            decoded = authenticate_token(token)
-            uid = decoded.get("uid")
-            user_doc = await coll.find_one({"firebase_id": uid})
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Token no provisto")
+        token = authorization.split(" ", 1)[1]
+        decoded = authenticate_token(token)
+        # Token local: buscar por _id
+        try:
+            oid = PyObjectId.parse(decoded.get("user_id"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="user id inválido")
+        user_doc = await coll.find_one({"_id": oid})
 
-            if not user_doc:
-                raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        if not user_doc:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-            # Limitar la respuesta a los campos de AuthUserModel
-            auth_user = AuthUserModel.model_validate(_serialize_doc(user_doc))
-            return ResponseModel(message="Perfil recuperado", data=auth_user.model_dump())
+        # Limitar la respuesta a los campos de AuthUserModel
+        auth_user = AuthUserModel.model_validate(_serialize_doc(user_doc))
+        return ResponseModel(message="Perfil recuperado", data=auth_user.model_dump())
     except HTTPException:
         raise
     except Exception as e:
@@ -147,7 +144,7 @@ async def update_user_profile(authorization: str | None = Header(None), payload:
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
     decoded = authenticate_token(token)
-    uid = decoded.get("uid")
+    # decoded es un dict normalizado: {auth_type, user_id, payload}
 
     # Construir campos a actualizar desde payload y desde token
     update_fields = {}
@@ -158,9 +155,19 @@ async def update_user_profile(authorization: str | None = Header(None), payload:
             if k in allowed:
                 update_fields[k] = v
 
-    # Usar email proveniente de Firebase siempre que exista (garantizar identidad)
-    if decoded.get("email"):
-        update_fields["email"] = decoded.get("email")
+        # Si el payload incluye una contraseña en claro, guardamos su hash
+        if "password" in payload:
+            pw = payload.get("password")
+            if pw:
+                update_fields["password_hash"] = get_password_hash(pw)
+            # nunca persistas la contraseña en claro
+            if "password" in update_fields:
+                del update_fields["password"]
+
+    # Si el token incluye email en su payload (opcional), preferirlo
+    token_payload = decoded.get("payload") or {}
+    if token_payload.get("email"):
+        update_fields["email"] = token_payload.get("email")
 
     # Preferir display_name del payload, si no usar el del token
     if "display_name" not in update_fields and decoded.get("name"):
@@ -170,9 +177,114 @@ async def update_user_profile(authorization: str | None = Header(None), payload:
 
     try:
         coll = database.get_user_collection()
-        set_on_insert = {
-            "firebase_id": uid,
+
+        # Token local: buscamos por _id (el subject del token) y actualizamos
+        local_id = decoded.get("user_id")
+        try:
+            oid = PyObjectId.parse(local_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="user id inválido")
+
+        if not update_fields:
+            update_fields = {}
+
+        update_op = {"$set": update_fields}
+        updated = await coll.find_one_and_update(
+            {"_id": oid},
+            update_op,
+            upsert=False,
+            return_document=ReturnDocument.AFTER,
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    except Exception as e:
+        logging.exception("Error actualizando/creando usuario en DB")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Validar/limitar la respuesta con AuthUserModel
+    auth_user = AuthUserModel.model_validate(_serialize_doc(updated))
+    return ResponseModel(message="Usuario actualizado", data=auth_user.model_dump())
+
+
+@router.post("/login", response_model=ResponseModel)
+async def local_login(payload: dict = Body(...)):
+    """
+    Login local usando email + password (dev/registro local).
+    Devuelve un JWT creado por `auth.auth.create_access_token` con subject = ObjectId del usuario.
+    """
+    email = payload.get("email")
+    password = payload.get("password")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email y password requeridos")
+
+    try:
+        coll = database.get_user_collection()
+        user_doc = await coll.find_one({"email": email})
+        if not user_doc:
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+        pw_hash = user_doc.get("password_hash")
+        if not pw_hash or not verify_password(password, pw_hash):
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+        # actualizar last_login
+        await coll.update_one({"_id": user_doc["_id"]}, {"$set": {"last_login": datetime.utcnow()}})
+
+        # crear token local (subject = id del documento)
+        subject = str(user_doc.get("_id"))
+        token = create_access_token(subject)
+
+        return ResponseModel(message="Login OK", data={"access_token": token, "token_type": "bearer", "user_id": subject})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.exception("Error en login local")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/register", response_model=ResponseModel)
+async def register(payload: dict = Body(...)):
+    """Registrar un usuario local (email + password + display_name). Devuelve token local JWT."""
+
+    email = payload.get("email")
+    password = payload.get("password")
+    display_name = payload.get("display_name") or payload.get("name")
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="email y password requeridos")
+
+    # El nombre de usuario es obligatorio
+    if not display_name:
+        raise HTTPException(status_code=400, detail="Nombre de usuario (display_name) requerido")
+
+    # Normalizar email para evitar duplicados por mayúsculas/espacios
+    email_normalized = email.strip().lower()
+
+    # Normalizar display_name para comprobaciones (pero mantener el original si se guarda)
+    display_name_check = display_name.strip()
+    if display_name_check == "":
+        raise HTTPException(status_code=400, detail="Nombre de usuario inválido")
+
+    try:
+        coll = database.get_user_collection()
+
+        # Comprobar email existente
+        existing_email = await coll.find_one({"email": email_normalized})
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Correo electrónico ya registrado")
+
+        # Comprobar display_name (comparación case-insensitive exacta)
+        regex = {"$regex": f"^{re.escape(display_name_check)}$", "$options": "i"}
+        existing_name = await coll.find_one({"display_name": regex})
+        if existing_name:
+            raise HTTPException(status_code=400, detail="Nombre de usuario ya en uso")
+
+        user_doc = {
+            "_id": PyObjectId.new(),
+            "email": email_normalized,
+            "display_name": display_name_check,
+            "password_hash": get_password_hash(password),
             "created_at": datetime.utcnow(),
+            "last_login": datetime.utcnow(),
             "mcps": [],
             "code_snippets": [],
             "api_keys": [],
@@ -181,26 +293,11 @@ async def update_user_profile(authorization: str | None = Header(None), payload:
             "metadata": {},
         }
 
-        # Evitar conflicto MongoDB: si update_fields contiene alguna clave,
-        # no incluirla también en $setOnInsert (Mongo no permite la misma ruta en dos operadores).
-        for k in list(set_on_insert.keys()):
-            if k in update_fields:
-                del set_on_insert[k]
+        await coll.insert_one(user_doc)
 
-        update_op = {"$set": update_fields}
-        if set_on_insert:
-            update_op["$setOnInsert"] = set_on_insert
-
-        updated = await coll.find_one_and_update(
-            {"firebase_id": uid},
-            update_op,
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
-        )
+        return ResponseModel(message="Usuario creado", data={"user_id": str(user_doc["_id"])})
+    except HTTPException:
+        raise
     except Exception as e:
-        logging.exception("Error actualizando/creando usuario en DB")
+        logging.exception("Error registrando usuario local")
         raise HTTPException(status_code=500, detail=str(e))
-
-    # Validar/limitar la respuesta con AuthUserModel
-    auth_user = AuthUserModel.model_validate(_serialize_doc(updated))
-    return ResponseModel(message="Usuario actualizado", data=auth_user.model_dump())
