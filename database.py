@@ -30,6 +30,7 @@ DATABASE_NAME = "insanus_chat"
 # Colecciones que creaste
 COLLECTION_USERS = "users"
 COLLECTION_CHATS = "chats"
+COLLECTION_MESSAGES = "messages"
 
 async def connect_to_mongo():
     """
@@ -101,3 +102,10 @@ def get_chat_collection():
     if db is None:
         raise DatabaseNotInitializedError("Database client is not initialized")
     return db[COLLECTION_CHATS]
+
+
+def get_message_collection():
+    """Devuelve la colección de mensajes (messages)."""
+    if db is None:
+        raise DatabaseNotInitializedError("Database client is not initialized")
+    return db[COLLECTION_MESSAGES]

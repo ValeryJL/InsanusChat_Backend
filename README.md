@@ -9,7 +9,7 @@ Requisitos previos
 Pasos rápidos (entorno virtual)
 1. Clonar el repo:
     ```
-    git clone <REPO_URL>
+    git clone https://github.com/ValeryJL/InsanusChat_Backend.git
     cd InsanusChat_Backend
     ```
 2. Crear y activar entorno virtual:
@@ -22,9 +22,9 @@ Pasos rápidos (entorno virtual)
     pip install -r requirements.txt
     ```
 4. Configurar variables de entorno (ver sección siguiente).
-5. Ejecutar la aplicación en modo desarrollo (ajustar el import si tu app principal no es `main:app`):
+5. Ejecutar la aplicación en modo desarrollo (ajustar el import si tu app principal no es `backend:app`, `backend.py`, `Class app`):
     ```
-    uvicorn main:app --reload --host 0.0.0.0 --port $PORT
+    uvicorn backend:app --reload --host 0.0.0.0 --port PORT
     ```
 
 ## Variables de entorno recomendadas
@@ -36,16 +36,15 @@ Crea un archivo `.env` en la raíz con las variables necesarias. Ejemplo mínimo
 PORT=8000
 
 # Seguridad / Aplicación
-FIREBASE_SERVICE_ACCOUNT_PATH="./secrets/firebase-service-account.json"
+LOCAL_AUTH_SECRET="secreto de JWT"
+LOCAL_AUTH_ALG="algoritmo de encriptación"
+LOCAL_AUTH_EXPIRE_MIN="tiempo de expiracion del token JWT"
 
 # Base de datos
 MONGO_URI="cadena de coneccion a mongoDB"
-
+MONGO_X509_CERT_PATH="./secrets/mongodb-cert.pem"
 ```
 
 Sugerencias
 - Usa gestores de secretos (Vault, AWS Secrets Manager, GitHub Secrets) en producción en lugar de `.env`.
-- Genera SECRET_KEY con un generador seguro y cambia valores por defecto antes de desplegar.
-- Documenta cualquier variable adicional específica de tus módulos (por ejemplo, rutas de herramientas, claves de terceros) en este archivo README.
-
-Si necesitas un ejemplo adaptado al framework/migraciones que usas (Alembic, Django, Tortoise, etc.), indícame cuál para incluir comandos específicos.
+- Genera LOCAL_AUTH_SECRET con un generador seguro y cambia valores por defecto antes de desplegar.

@@ -141,25 +141,37 @@ class AgentModel(BaseModel):
 # -------------------------------------------------
 class MessageModel(BaseModel):
     """
-    Modelo de mensaje para la colección 'messages'.
-    Incluye campos para soportar árbol (parent/children), path (ancestros), thread_root (root de rama), y metadatos operativos.
+    Mensaje embebido dentro de un documento `chats`.
+
+    Este proyecto modela chats entre un usuario y un agente de IA. Cada mensaje
+    puede activar al agente; por eso el mensaje contiene datos sobre qué agente
+    se invoca, qué herramientas están activas y metadatos operativos.
     """
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    chat_id: PyObjectId = Field(..., description="ID del chat al que pertenece (referencia)")
+    # referencia al chat (si usamos colección separada de mensajes)
+    chat_id: PyObjectId = Field(..., description="ID del chat al que pertenece el mensaje")
+
     parent_id: Optional[PyObjectId] = Field(None, description="ID del padre directo")
     children_ids: List[PyObjectId] = Field(default_factory=list, description="IDs de hijos directos")
     path: List[PyObjectId] = Field(default_factory=list, description="Ruta ancestry [root,...,this]")
-    thread_root: PyObjectId = Field(..., description="ID del root de la rama/hilo (puede ser el primer mensaje del chat)")
-    branch_label: Optional[str] = Field(None, description="Etiqueta opcional para la rama (p.ej. 'v2')")
+    # primer ancestro hacia arriba que tiene más de un hijo (anchor para 'primos')
+    branch_anchor: Optional[PyObjectId] = Field(None, description="Primer ancestro con múltiples hijos (o None)")
+    # referencias a nodos "primos" (izquierda/derecha) para navegación lateral rápida
+    cousin_left: Optional[PyObjectId] = Field(None, description="Nodo primo a la izquierda (si existe)")
+    cousin_right: Optional[PyObjectId] = Field(None, description="Nodo primo a la derecha (si existe)")
 
-    sender_id: str = Field(..., description="ID del remitente (firebase uid, 'AI', 'SYSTEM')")
-    role: str = Field("user", description="user|agent|system|tool")
-    content: str = Field(..., description="Contenido del mensaje")
-    content_type: str = Field("text", description="text|file|json|etc")
-    tools_used: List[Dict[str, Any]] = Field(default_factory=list, description="Herramientas invocadas")
-    tokens_used: Optional[int] = Field(None, description="Estimación tokens usados")
-    status: str = Field("done", description="queued|processing|done|failed")
+    sender_id: str = Field(..., description="ID del remitente (string): uid, agent_id, tool_id o 'SYSTEM')")
+    role: str = Field("user", description="user|agent|system|tool|initializer")
 
+    # Contenido del mensaje
+    content: str = Field(..., description="Contenido principal del mensaje (texto)")
+    content_type: str = Field("text", description="text|json|file|markdown|etc")
+
+    # Estado/flujo del procesamiento por el agente
+    status: str = Field("queued", description="queued|processing|done|failed")
+    tokens_used: Optional[int] = Field(None, description="Estimación de tokens usados por el agente (si aplica)")
+
+    # Timestamps
     created_at: datetime = Field(default_factory=datetime.utcnow)
     edited_at: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
@@ -175,18 +187,23 @@ class MessageModel(BaseModel):
 
 class ChatModel(BaseModel):
     """
-    Modelo de chat para la colección 'chats'.
-    Guarda metadata y resumen de ramas/threads. Los mensajes se guardan en la colección 'messages'.
+    Modelo de chat para la colección `chats`.
+
+    Un `chat` pertenece a un usuario y tiene asociado un agente objetivo (agent_id).
+    Los mensajes se almacenan embebidos en el campo `messages`.
     """
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    user_id: str = Field(..., description="Owner firebase uid")
-    title: str = Field(..., max_length=150)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-
-    default_thread_root: Optional[PyObjectId] = Field(None, description="Root de thread por defecto")
-    thread_roots: List[PyObjectId] = Field(default_factory=list, description="Roots de ramas principales")
+    user_id: str = Field(..., description="Owner user id (string)")
+    agent_id: Optional[PyObjectId] = Field(None, description="Agent principal asociado al chat")
+    title: Optional[str] = Field(None, max_length=150)
+    messages: List[MessageModel] = Field(default_factory=list)
     message_count: int = Field(0, description="Contador de mensajes en el chat")
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    # Cuando hay un agente procesando una respuesta, marcamos el chat como bloqueado
+    # para evitar escrituras concurrentes que puedan crear ramas indeseadas.
+    locked: bool = Field(False, description="Flag que indica si el chat está bloqueado para nuevas escrituras mientras un agente procesa")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: Optional[datetime] = None
 
     model_config = {
         "populate_by_name": True,
