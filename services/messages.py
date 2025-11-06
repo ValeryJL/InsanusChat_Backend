@@ -52,6 +52,23 @@ async def send_message(message_doc, chat_oid, manager=None):
         except Exception:
             pass
 
+    # Broadcast the inserted message to websocket clients in the chat (if manager provided).
+    # We first send an ACK envelope (nested under 'mensaje') and then the normal message.
+    if manager is not None:
+        try:
+            chat_key = str(chat_oid)
+            ack_envelope = {"cmd": "ack", "message": {"mensaje": message_doc}}
+            await manager.broadcast(chat_key, ack_envelope)
+            # Normal message broadcast (ConnectionManager will envelope it if needed)
+            await manager.broadcast(chat_key, message_doc)
+        except Exception:
+            try:
+                logging.exception("send_message: failed to broadcast message or ack")
+            except Exception:
+                pass
+
+    return msg_id
+
 async def process_user_message(chat_oid, message, manager=None):
     """Insert user message, broadcast it, call agent to generate a response, insert and broadcast response.
 
@@ -63,6 +80,20 @@ async def process_user_message(chat_oid, message, manager=None):
     # mark chat locked
     try:
         await chats.update_one({"_id": chat_oid}, {"$set": {"locked": True}})
+    except Exception:
+        pass
+    # announce lock to websocket clients
+    try:
+        if manager is not None:
+            try:
+                chat_key = str(chat_oid)
+                lock_env = {"cmd": "chat_locked", "message": {"locked": True}}
+                await manager.broadcast(chat_key, lock_env)
+            except Exception:
+                try:
+                    logging.exception("process_user_message: failed to broadcast chat_locked")
+                except Exception:
+                    pass
     except Exception:
         pass
     # insert initial system message (send_message returns the inserted _id)
@@ -83,10 +114,38 @@ async def process_user_message(chat_oid, message, manager=None):
             await send_message(response, chat_oid, manager=manager)
             # unlock chat
             await chats.update_one({"_id": chat_oid}, {"$set": {"locked": False}})
+            # announce unlock to websocket clients
+            try:
+                if manager is not None:
+                    try:
+                        chat_key = str(chat_oid)
+                        unlock_env = {"cmd": "chat_unlocked", "message": {"locked": False}}
+                        await manager.broadcast(chat_key, unlock_env)
+                    except Exception:
+                        try:
+                            logging.exception("process_user_message: failed to broadcast chat_unlocked")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         except Exception:
             # best-effort: ensure chat unlocked
             try:
                 await chats.update_one({"_id": chat_oid}, {"$set": {"locked": False}})
+            except Exception:
+                pass
+            # announce unlock even if we hit exception
+            try:
+                if manager is not None:
+                    try:
+                        chat_key = str(chat_oid)
+                        unlock_env = {"cmd": "chat_unlocked", "message": {"locked": False}}
+                        await manager.broadcast(chat_key, unlock_env)
+                    except Exception:
+                        try:
+                            logging.exception("process_user_message: failed to broadcast chat_unlocked after exception")
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -183,8 +242,8 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
 
     Soporta comandos JSON entrantes con la forma:
       {"cmd": "send", "text": "...", "parent_id": "<id>"}
-      {"cmd": "fetch_top", "id": "<message_id>", "limit": 16, "direction": "left"}
-      {"cmd": "fetch_bottom", "id": "<message_id>", "limit": 16}
+      {"cmd": "fetch_from_top", "id": "<message_id>", "limit": 16, "direction": "left"}
+      {"cmd": "fetch_from_bottom", "id": "<message_id>", "limit": 16}
       {"cmd": "get", "id": "<message_id>"}
       {"cmd": "ping"}
 
@@ -324,16 +383,14 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
                     # reuse existing service to insert and broadcast
                     msg_id = await process_user_message(chat_oid, user_msg, manager=manager)
                     # process_user_message returns the original message object in current implementation
-                    # send ack containing the inserted id
-                    ack = {"cmd": "ack", "message": {"_id": str(user_msg.get("_id"))}}
-                    await websocket.send_text(json.dumps(ack, default=str, ensure_ascii=False))
+                    # ack/broadcast is handled by send_message via the manager; do not send here
                 except Exception as e:
                     logging.exception("websocket_handler: failed to process send command")
                     await send_error(websocket, str(e))
                 continue
 
             # 3) fetch history from top (use build_history_from_message_top)
-            if cmd == "fetch_top":
+            if cmd == "lockh_from_top":
                 mid = data.get("id")
                 limit = int(data.get("limit") or 16)
                 direction = data.get("direction") or RIGHT
@@ -346,12 +403,12 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
                     env = {"cmd": "history", "history": hist}
                     await websocket.send_text(json.dumps(env, default=str, ensure_ascii=False))
                 except Exception as e:
-                    logging.exception("websocket_handler: fetch_top failed")
+                    logging.exception("websocket_handler: fetch_from_top failed")
                     await send_error(websocket, str(e))
                 continue
 
             # 4) fetch history from bottom (ancestors)
-            if cmd == "fetch_bottom":
+            if cmd == "fetch_from_bottom":
                 mid = data.get("id")
                 limit = int(data.get("limit") or 16)
                 if not mid:
@@ -362,7 +419,7 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
                     env = {"cmd": "history", "history": hist}
                     await websocket.send_text(json.dumps(env, default=str, ensure_ascii=False))
                 except Exception as e:
-                    logging.exception("websocket_handler: fetch_bottom failed")
+                    logging.exception("websocket_handler: fetch_from_bottom failed")
                     await send_error(websocket, str(e))
                 continue
 
