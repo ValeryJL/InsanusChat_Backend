@@ -486,6 +486,7 @@ async def websocket_create_chat(websocket: WebSocket):
     metadata = payload.get("metadata") or {}
     raw_agent_id = payload.get("agent_id") or None
     agent_obj = None
+    mensaje = payload.get("message") or None
     if not raw_agent_id or not isinstance(raw_agent_id, str):
         try:
             await websocket.send_json({"error": "agent_id is required and must be a string"})
