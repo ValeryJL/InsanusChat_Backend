@@ -296,14 +296,17 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
             pass
 
     try:
+        logging.info("websocket_handler: start for chat_oid=%s uid=%s", str(chat_oid), str(uid))
         while True:
             data = None
             try:
                 data = await websocket.receive_json()
+                logging.debug("websocket_handler: received json payload: %s", data)
             except Exception:
                 # try to receive text and parse
                 try:
                     raw = await websocket.receive_text()
+                    logging.debug("websocket_handler: received raw text payload: %s", raw)
                     data = json.loads(raw)
                 except Exception:
                     await send_error(websocket, "invalid json payload")
@@ -317,6 +320,7 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
 
             # 1) ping
             if cmd == "ping":
+                logging.debug("websocket_handler: ping received from uid=%s chat=%s", str(uid), str(chat_oid))
                 try:
                     await websocket.send_text(json.dumps({"cmd": "pong"}, ensure_ascii=False))
                 except Exception:
@@ -381,7 +385,10 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
 
                 try:
                     # reuse existing service to insert and broadcast
+                    logging.info("websocket_handler: processing send command uid=%s chat=%s parent_id=%s text_preview=%s",
+                                 str(uid), str(chat_oid), str(parent_id), (text or '')[:120])
                     msg_id = await process_user_message(chat_oid, user_msg, manager=manager)
+                    logging.info("websocket_handler: processed send command uid=%s chat=%s result=%s", str(uid), str(chat_oid), str(getattr(msg_id, '_id', msg_id)))
                     # process_user_message returns the original message object in current implementation
                     # ack/broadcast is handled by send_message via the manager; do not send here
                 except Exception as e:
@@ -390,10 +397,11 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
                 continue
 
             # 3) fetch history from top (use build_history_from_message_top)
-            if cmd == "lockh_from_top":
+            if cmd == "fetch_from_top":
                 mid = data.get("id")
                 limit = int(data.get("limit") or 16)
                 direction = data.get("direction") or RIGHT
+                logging.info("websocket_handler: fetch_from_top requested id=%s limit=%s direction=%s by uid=%s", str(mid), limit, direction, str(uid))
                 if not mid:
                     await send_error(websocket, "id is required")
                     continue
@@ -411,6 +419,7 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
             if cmd == "fetch_from_bottom":
                 mid = data.get("id")
                 limit = int(data.get("limit") or 16)
+                logging.info("websocket_handler: fetch_from_bottom requested id=%s limit=%s by uid=%s", str(mid), limit, str(uid))
                 if not mid:
                     await send_error(websocket, "id is required")
                     continue
@@ -426,6 +435,7 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
             # 5) get a single message
             if cmd == "get":
                 mid = data.get("id")
+                logging.info("websocket_handler: get requested id=%s by uid=%s", str(mid), str(uid))
                 if not mid:
                     await send_error(websocket, "id is required")
                     continue
@@ -440,6 +450,7 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
                 continue
 
             # unknown command
+            logging.warning("websocket_handler: unknown cmd received: %s from uid=%s", str(cmd), str(uid))
             await send_error(websocket, f"unknown cmd: {cmd}")
 
     except Exception:
