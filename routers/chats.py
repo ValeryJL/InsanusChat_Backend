@@ -541,11 +541,6 @@ async def websocket_create_chat(websocket: WebSocket):
             "created_at": now,
         }
 
-        # inicializar chat vía servicio de mensajes (broadcast/agents)
-        await messages_service.process_user_message(chat_id, starter, manager=manager)
-
-        # preparar y enviar respuesta con el chat creado
-        chat_doc["_id"] = chat_id
         try:
             await websocket.send_json({"chat": _sanitize_chat_record(chat_doc)})
         except Exception:
@@ -553,6 +548,12 @@ async def websocket_create_chat(websocket: WebSocket):
                 await websocket.send_json({"chat_id": str(chat_id)})
             except Exception:
                 pass
+
+        # inicializar chat vía servicio de mensajes (broadcast/agents)
+        await messages_service.process_user_message(chat_id, starter, manager=manager)
+
+        # preparar y enviar respuesta con el chat creado
+        chat_doc["_id"] = chat_id
         try:
             await manager.connect(chat_id, websocket)
             await messages_service.websocket_handler(websocket, chat_id, uid, manager)
