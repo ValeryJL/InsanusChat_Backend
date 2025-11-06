@@ -2,6 +2,9 @@ from datetime import datetime
 import asyncio
 import logging
 
+# tiempo por defecto (segundos) de inactividad tras el cual se cierra la conexión
+DEFAULT_WS_IDLE_TIMEOUT = 300  # 5 minutos
+
 from database import get_message_collection, get_chat_collection
 from models import PyObjectId
 from services import agents as agents_service
@@ -57,7 +60,12 @@ async def send_message(message_doc, chat_oid, manager=None):
     if manager is not None:
         try:
             chat_key = str(chat_oid)
-            ack_envelope = {"cmd": "ack", "message": {"mensaje": message_doc}}
+            # send a minimal ACK (only the inserted id) to avoid duplicating full message content
+            try:
+                ack_payload = {"_id": str(msg_id)} if msg_id is not None else {"_id": None}
+            except Exception:
+                ack_payload = {"_id": msg_id}
+            ack_envelope = {"cmd": "ack", "message": ack_payload}
             await manager.broadcast(chat_key, ack_envelope)
             # Normal message broadcast (ConnectionManager will envelope it if needed)
             await manager.broadcast(chat_key, message_doc)
@@ -299,18 +307,49 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
         logging.info("websocket_handler: start for chat_oid=%s uid=%s", str(chat_oid), str(uid))
         while True:
             data = None
+            idle_timeout = DEFAULT_WS_IDLE_TIMEOUT
             try:
-                data = await websocket.receive_json()
-                logging.debug("websocket_handler: received json payload: %s", data)
-            except Exception:
-                # try to receive text and parse
+                # try to receive a JSON payload directly, with idle timeout
                 try:
-                    raw = await websocket.receive_text()
-                    logging.debug("websocket_handler: received raw text payload: %s", raw)
-                    data = json.loads(raw)
+                    data = await asyncio.wait_for(websocket.receive_json(), timeout=idle_timeout)
+                    logging.debug("websocket_handler: received json payload: %s", data)
+                except asyncio.TimeoutError:
+                    # idle timeout — close connection
+                    logging.info("websocket_handler: idle timeout reached (secs=%s) for chat=%s uid=%s, closing websocket", str(idle_timeout), str(chat_oid), str(uid))
+                    try:
+                        await websocket.send_text(json.dumps({"cmd": "error", "error": "idle_timeout"}, ensure_ascii=False))
+                    except Exception:
+                        pass
+                    try:
+                        await websocket.close()
+                    except Exception:
+                        pass
+                    # ensure manager disconnect if provided
+                    try:
+                        if manager is not None:
+                            manager.disconnect(chat_oid, websocket)
+                    except Exception:
+                        pass
+                    return
                 except Exception:
-                    await send_error(websocket, "invalid json payload")
-                    continue
+                    # receive_json failed (maybe not JSON). Try to get raw text and parse it.
+                    try:
+                        raw = await asyncio.wait_for(websocket.receive_text(), timeout=1)
+                        logging.debug("websocket_handler: received raw text payload: %s", raw)
+                        try:
+                            data = json.loads(raw)
+                        except Exception:
+                            await send_error(websocket, "invalid json payload")
+                            continue
+                    except asyncio.TimeoutError:
+                        await send_error(websocket, "failed to receive payload")
+                        continue
+                    except Exception:
+                        await send_error(websocket, "failed to receive payload")
+                        continue
+            except Exception:
+                await send_error(websocket, "unexpected receive error")
+                continue
 
             if not isinstance(data, dict):
                 await send_error(websocket, "payload must be a JSON object")
@@ -334,6 +373,23 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
                 if not text or not isinstance(text, str):
                     await send_error(websocket, "text is required")
                     continue
+
+                # check chat lock atomically: if locked, reject the send
+                try:
+                    # attempt to acquire lock only if not already locked
+                    acquired = await chats_col.find_one_and_update(
+                        {"_id": chat_oid, "locked": False},
+                        {"$set": {"locked": True}}
+                    )
+                    if acquired is None:
+                        await send_error(websocket, "Chat is locked for processing")
+                        continue
+                except Exception:
+                    # if we can't check the lock for any reason, proceed but log
+                    try:
+                        logging.exception("websocket_handler: failed to check/acquire chat lock")
+                    except Exception:
+                        pass
 
                 # resolve parent if provided
                 parent_obj = None
@@ -395,6 +451,26 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
                     logging.exception("websocket_handler: failed to process send command")
                     await send_error(websocket, str(e))
                 continue
+
+            # 2b) client-requested close/disconnect
+            if cmd in ("close", "disconnect"):
+                logging.info("websocket_handler: close requested by uid=%s chat=%s", str(uid), str(chat_oid))
+                try:
+                    # notify client we're closing
+                    await websocket.send_text(json.dumps({"cmd": "closing", "reason": "client_requested"}, ensure_ascii=False))
+                except Exception:
+                    pass
+                # ensure we remove from manager and then close
+                try:
+                    if manager is not None:
+                        manager.disconnect(chat_oid, websocket)
+                except Exception:
+                    logging.exception("websocket_handler: error while disconnecting before close for chat=%s uid=%s", str(chat_oid), str(uid))
+                try:
+                    await websocket.close()
+                except Exception:
+                    logging.exception("websocket_handler: error while closing websocket after client-requested close for chat=%s uid=%s", str(chat_oid), str(uid))
+                return
 
             # 3) fetch history from top (use build_history_from_message_top)
             if cmd == "fetch_from_top":

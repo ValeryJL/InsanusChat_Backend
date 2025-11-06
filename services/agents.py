@@ -113,7 +113,7 @@ async def run_agent(chat_oid, message_id):
         await msgs_col.update_one({"_id": message_doc["_id"]}, {"$set": {"status": "processing"}})
 
         # simulate work
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(3)
 
         user_text = message_doc.get("content") or message_doc.get("text") or ""
         # incorporate a short representation of history into the simulated response for testing
