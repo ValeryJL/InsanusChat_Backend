@@ -116,7 +116,7 @@ async def create_api_key(authorization: str | None = Header(None), body: dict = 
     return {"message": "API key creada", "data": out}
 
 @router.put("/")
-async def update_api_key(api_key_id: str | None = Query(None, alias="api_key"), authorization: str | None = Header(None), body: dict = Body(...)):
+async def update_api_key(api_key_id: str | None = Query(None, alias="api_key_id"), authorization: str | None = Header(None), body: dict = Body(...)):
     """
     Endpoint de ejemplo para actualizar una API Key.
     """
@@ -192,7 +192,7 @@ async def update_api_key(api_key_id: str | None = Query(None, alias="api_key"), 
     return {"message": "API key actualizada", "data": kop}
 
 @router.delete("/")
-async def delete_api_key(api_key_id: str | None = Query(None, alias="api_key"), authorization: str | None = Header(None)):
+async def delete_api_key(api_key_id: str | None = Query(None, alias="api_key_id"), authorization: str | None = Header(None)):
     """
     Endpoint de ejemplo para eliminar una API Key.
     """
