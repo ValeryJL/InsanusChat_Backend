@@ -52,8 +52,8 @@ def _serialize_doc(doc: Any) -> Any:
     """
     def convert(obj: Any) -> Any:
         # Objetos atómicos
-        if isinstance(obj, ObjectId):
-            return str(obj)
+        if isinstance(obj, str):
+            return obj
         if isinstance(obj, PyObjectId):
             return str(obj)
         if isinstance(obj, datetime):
@@ -103,8 +103,8 @@ async def verify_token(authorization: Optional[str] = Header(None)):
         decoded = authenticate_token(token)
         # asegurar compatibilidad: exponer tanto "uid" como "user_id"
         data = dict(decoded)
-        if "uid" in data and "user_id" not in data:
-            data["user_id"] = data["uid"]
+        if "uid" not in data and "user_id" in data:
+            data["uid"] = data["user_id"]
         return ResponseModel(message="Token verificado", data=data)
     except HTTPException:
         raise
@@ -136,7 +136,7 @@ async def get_user_profile(authorization: str | None = Header(None)):
 
         # Limitar la respuesta a los campos de AuthUserModel
         auth_user = AuthUserModel.model_validate(_serialize_doc(user_doc))
-        return ResponseModel(message="Perfil recuperado", data=auth_user.model_dump())
+        return ResponseModel(message="Perfil recuperado", data=_serialize_doc(auth_user))
     except HTTPException:
         raise
     except Exception as e:
