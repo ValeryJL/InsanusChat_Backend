@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Header, Body
+from fastapi import APIRouter, HTTPException, Header, Body, Query
 from routers import auth
 import database
 from models import PyObjectId
@@ -107,8 +107,8 @@ async def create_mcp(authorization: str | None = Header(None), body: dict = Body
     return {"message": "MCP creado", "data": out}
 
 
-@router.put("/mcps/{mcp_id}")
-async def update_mcp(mcp_id: str, authorization: str | None = Header(None), body: dict = Body(...)):
+@router.put("/mcps")
+async def update_mcp(mcp_id: str | None = Query(None, alias="mcp_id"), authorization: str | None = Header(None), body: dict = Body(...)):
     """Actualizar MCP del usuario. Campos permitidos: name, endpoint, spec, auth, metadata, active"""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
@@ -145,6 +145,8 @@ async def update_mcp(mcp_id: str, authorization: str | None = Header(None), body
         raise HTTPException(status_code=404, detail="MCP no encontrado o sin cambios")
 
     user = await coll.find_one({"_id": user_oid}, {"mcps": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
     updated = None
     for m in user.get("mcps", []):
         if str(m.get("_id")) == str(mid):
@@ -177,11 +179,19 @@ async def delete_mcp(mcp_id: str, authorization: str | None = Header(None)):
     except Exception:
         raise HTTPException(status_code=400, detail="mcp_id inválido")
     coll = database.get_user_collection()
+    data = await coll.find_one({"_id": user_oid}, {"mcps": 1})
+    mcp = None
+    if data:
+        for m in data.get("mcps", []):
+            if str(m.get("_id")) == str(mid):
+                mcp = m
+                break
+    if not mcp:
+        raise HTTPException(status_code=404, detail="MCP no encontrado")
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"mcps": {"_id": mid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="MCP no encontrado")
-    return {"message": "MCP eliminado", "data": {"id": str(mcp_id)}}
-
+    return {"message": "MCP eliminado", "data": {"id": auth._serialize_doc(mcp)}}
 
 ## ---------------- Snippets CRUD ----------------
 
@@ -230,8 +240,8 @@ async def create_snippet(authorization: str | None = Header(None), body: dict = 
     return {"message": "Snippet creado", "data": out}
 
 
-@router.put("/snippets/{snippet_id}")
-async def update_snippet(snippet_id: str, authorization: str | None = Header(None), body: dict = Body(...)):
+@router.put("/snippets")
+async def update_snippet(snippet_id: str | None = Query(None, alias="snippet_id"), authorization: str | None = Header(None), body: dict = Body(...)):
     """Actualizar snippet: name, description, code, language, public"""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
@@ -268,6 +278,8 @@ async def update_snippet(snippet_id: str, authorization: str | None = Header(Non
         raise HTTPException(status_code=404, detail="Snippet no encontrado o sin cambios")
 
     user = await coll.find_one({"_id": user_oid}, {"code_snippets": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
     updated = None
     for s in user.get("code_snippets", []):
         if str(s.get("_id")) == str(sid):
@@ -300,8 +312,16 @@ async def delete_snippet(snippet_id: str, authorization: str | None = Header(Non
     except Exception:
         raise HTTPException(status_code=400, detail="snippet_id inválido")
     coll = database.get_user_collection()
+    data = await coll.find_one({"_id": user_oid}, {"code_snippets": 1})
+    snippet = None
+    if data:
+        for s in data.get("code_snippets", []):
+            if str(s.get("_id")) == str(sid):
+                snippet = s
+                break
+    if not snippet:
+        raise HTTPException(status_code=404, detail="Snippet no encontrado")
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"code_snippets": {"_id": sid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="Snippet no encontrado")
-    return {"message": "Snippet eliminado", "data": {"id": str(snippet_id)}}
-
+    return {"message": "Snippet eliminado", "data": {"id": auth._serialize_doc(snippet_id)}}
