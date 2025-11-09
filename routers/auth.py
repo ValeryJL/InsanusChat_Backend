@@ -45,32 +45,29 @@ def authenticate_token(token: str):
         raise HTTPException(status_code=401, detail=str(e))
 
 
-def _serialize_doc(doc: dict) -> dict:
-    if not doc:
-        return doc
-    out = dict(doc)
-    if "_id" in out:
-        try:
-            # Si es un ObjectId de bson, convertir a str directamente
-            if isinstance(out["_id"], ObjectId):
-                out["_id"] = str(out["_id"])
-            else:
-                # Intentar parsear a PyObjectId; si funciona, serializamos
-                parsed = PyObjectId.parse(out["_id"])
-                out["_id"] = str(parsed)
-        except Exception:
-            # Como fallback, intentar forzar a str
-            try:
-                out["_id"] = str(out["_id"])
-            except Exception:
-                pass
-    for k, v in list(out.items()):
-        # Convertir cualquier ObjectId en otros campos
-        if isinstance(v, ObjectId):
-            out[k] = str(v)
-        if isinstance(v, datetime):
-            out[k] = v.isoformat()
-    return out
+def _serialize_doc(doc: Any) -> Any:
+    """
+    Convierte recursivamente bson.ObjectId -> str y datetime -> ISO en todo el documento.
+    Devuelve una estructura nueva (dict/list/primitive) segura para Pydantic/JSON.
+    """
+    def convert(obj: Any) -> Any:
+        # Objetos atómicos
+        if isinstance(obj, ObjectId):
+            return str(obj)
+        if isinstance(obj, PyObjectId):
+            return str(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        # Estructuras compuestas
+        if isinstance(obj, dict):
+            return {k: convert(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple, set)):
+            converted = [convert(v) for v in obj]
+            return type(obj)(converted) if not isinstance(obj, tuple) else tuple(converted)
+        # Otros tipos (int, str, float, bool, None, etc.)
+        return obj
+
+    return convert(doc)
 
 class AuthUserModel(BaseModel):
     """
