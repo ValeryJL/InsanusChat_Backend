@@ -324,4 +324,4 @@ async def delete_snippet(snippet_id: str | None = Query(None, alias="snippet_id"
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"code_snippets": {"_id": sid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="Snippet no encontrado")
-    return {"message": "Snippet eliminado", "data": {"id": auth._serialize_doc(snippet_id)}}
+    return {"message": "Snippet eliminado", "data": {"id": auth._serialize_doc(snippet)}}
