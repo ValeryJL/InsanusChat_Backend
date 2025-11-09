@@ -162,8 +162,8 @@ async def update_mcp(mcp_id: str | None = Query(None, alias="mcp_id"), authoriza
     return {"message": "MCP actualizado", "data": mop}
 
 
-@router.delete("/mcps/{mcp_id}")
-async def delete_mcp(mcp_id: str, authorization: str | None = Header(None)):
+@router.delete("/mcps")
+async def delete_mcp(mcp_id: str | None = Query(None, alias="mcp_id"), authorization: str | None = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
@@ -295,8 +295,8 @@ async def update_snippet(snippet_id: str | None = Query(None, alias="snippet_id"
     return {"message": "Snippet actualizado", "data": sop}
 
 
-@router.delete("/snippets/{snippet_id}")
-async def delete_snippet(snippet_id: str, authorization: str | None = Header(None)):
+@router.delete("/snippets")
+async def delete_snippet(snippet_id: str | None = Query(None, alias="snippet_id"), authorization: str | None = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
