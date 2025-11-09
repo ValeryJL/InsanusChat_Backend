@@ -226,9 +226,46 @@ async def delete_api_key(api_key_id: str | None = Query(None, alias="api_key_id"
         key_oid = PyObjectId.parse(api_key_id)
     except Exception:
         raise HTTPException(status_code=400, detail="api_key inválido")
-
     coll = database.get_user_collection()
+
+    # 1) Recuperar la key antes de borrarla
+    user = await coll.find_one({"_id": user_oid}, {"api_keys": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    existing = None
+    for k in user.get("api_keys", []):
+        if str(k.get("_id")) == str(key_oid):
+            existing = k
+            break
+    if not existing:
+        raise HTTPException(status_code=404, detail="API key no encontrada")
+
+    # serializar copia de datos que vamos a devolver en caso de éxito
+    kop = dict(existing)
+    kop["_id"] = str(kop.get("_id"))
+    if kop.get("created_at"):
+        kop["created_at"] = kop["created_at"].isoformat()
+    if kop.get("last_used"):
+        kop["last_used"] = kop["last_used"].isoformat()
+
+    # 2) Intentar borrado
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"api_keys": {"_id": key_oid}}})
     if res.modified_count == 0:
-        raise HTTPException(status_code=404, detail="API key no encontrada")
-        return {"message": "API key eliminada", "data": {"id": str(api_key_id)}}
+        # no se eliminó (race o no encontrado)
+        raise HTTPException(status_code=404, detail="API key no encontrada o no eliminada")
+
+    # 3) Verificar que realmente desapareció
+    user_after = await coll.find_one({"_id": user_oid}, {"api_keys": 1})
+    if not user_after:
+        # Esto es inesperado: el usuario ya no existe después del borrado
+        raise HTTPException(status_code=500, detail="Usuario no encontrado tras el intento de borrado")
+    still = False
+    for k in user_after.get("api_keys", []):
+        if str(k.get("_id")) == str(key_oid):
+            still = True
+            break
+    if still:
+        # rollback no posible: informar error
+        raise HTTPException(status_code=500, detail="La API key sigue presente tras el intento de borrado")
+
+    return {"message": "API key eliminada", "data": {"deleted": kop}}
