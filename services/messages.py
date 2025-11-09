@@ -285,7 +285,7 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
             except Exception:
                 out["parent_id"] = out.get("parent_id")
         if isinstance(out.get("children_ids"), list):
-            out["children_ids"] = [str(c) for c in out.get("children_ids")]
+            out["children_ids"] = [str(c) for c in out.get("children_ids") or []]
         if out.get("created_at") is not None:
             try:
                 out["created_at"] = out["created_at"].isoformat()
@@ -517,6 +517,9 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
                     continue
                 try:
                     doc = await msgs_col.find_one({"_id": PyObjectId.parse(mid)})
+                    if not doc:
+                        await send_error(websocket, "message not found")
+                        continue
                     out = _sanitize_msg_for_out(doc)
                     env = {"cmd": "message", "message": out}
                     await websocket.send_text(json.dumps(env, default=str, ensure_ascii=False))
@@ -561,6 +564,8 @@ async def build_history_from_message_top(first_msg_id, limit=16, direction=RIGHT
     descendents = []
     current = target_msg
     for _ in range(limit):
+        if not current:
+            break
         if not current.get("children_ids") or len(current.get("children_ids")) == 0:
             break
         if direction == LEFT:
@@ -592,7 +597,7 @@ async def build_history_from_message_top(first_msg_id, limit=16, direction=RIGHT
             parsed["children_ids"] = [str(c) for c in parsed["children_ids"]]
         # created_at -> isoformat if datetime-like
         ca = parsed.get("created_at")
-        if hasattr(ca, "isoformat"):
+        if ca and hasattr(ca, "isoformat"):
             try:
                 parsed["created_at"] = ca.isoformat()
             except Exception:
@@ -656,7 +661,7 @@ async def build_history_from_message_bottom(last_msg_id, limit=16):
             parsed["children_ids"] = [str(c) for c in parsed["children_ids"]]
         # created_at -> isoformat if datetime-like
         ca = parsed.get("created_at")
-        if hasattr(ca, "isoformat"):
+        if ca and hasattr(ca, "isoformat"):
             try:
                 parsed["created_at"] = ca.isoformat()
             except Exception:

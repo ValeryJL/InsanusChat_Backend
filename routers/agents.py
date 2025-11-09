@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Header, Body
+from fastapi import APIRouter, HTTPException, Header, Body, Query
 from routers import auth
 import database
 from models import PyObjectId
@@ -73,8 +73,6 @@ async def create_agent(authorization: str | None = Header(None), payload: dict =
       "description": "...",
       "system_prompt": ["You are a bot.", "SNIPPET:<id>"] ,
       "snippets": [{"name":"now","language":"javascript","code":"return Date.now()"}],
-      "active_tools": [],
-      "active_mcps": [],
       "model_selected": "gpt-4o"
     }
     """
@@ -125,8 +123,8 @@ async def create_agent(authorization: str | None = Header(None), payload: dict =
     return {"message": "Agente creado", "data": agent_doc_out}
 
 
-@router.put("/{agent_id}")
-async def update_agent(agent_id: str, authorization: str | None = Header(None), payload: dict | None = Body(None)):
+@router.put("/")
+async def update_agent(agent_id: str | None = Query(None,alias="agent_id"), authorization: str | None = Header(None), payload: dict | None = Body(None)):
     """Actualizar campos permitidos del agente embebido.
 
     Campos permitidos: name, description, system_prompt (lista), active_tools, active_mcps, model_selected, model_fallback, metadata, active
@@ -187,7 +185,8 @@ async def update_agent(agent_id: str, authorization: str | None = Header(None), 
     # Recuperar el agente actualizado
     user = await coll.find_one({"_id": user_oid}, {"agents": 1})
     agent = None
-    for a in user.get("agents", []):
+    agents = user.get("agents", []) if user else []
+    for a in agents:
         if str(a.get("_id")) == str(oid):
             agent = a
             break
@@ -198,8 +197,8 @@ async def update_agent(agent_id: str, authorization: str | None = Header(None), 
     return {"message": "Agente actualizado", "data": agent_out}
 
 
-@router.delete("/{agent_id}")
-async def delete_agent(agent_id: str, authorization: str | None = Header(None)):
+@router.delete("/")
+async def delete_agent(agent_id: str | None = Query(None, alias="agent_id"), authorization: str | None = Header(None)):
     """Eliminar (pull) un agente del usuario."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
