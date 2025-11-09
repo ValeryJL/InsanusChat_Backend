@@ -5,7 +5,7 @@ from datetime import datetime
 import asyncio
 import logging
 import database
-from models import PyObjectId
+from models import PyObjectId, ResponseModel
 from routers import auth
 from services import agents as agents_service
 from services import messages as messages_service
@@ -13,7 +13,7 @@ import json as _json
 from datetime import datetime as _dt
 import bson
 
-router = APIRouter(prefix="/api/v1/chats", tags=["chats"])
+router = APIRouter(prefix="/api/v1/chats", tags=["Chats"])
 
 
 def _sanitize_chat_record(c: dict) -> dict:
@@ -127,7 +127,7 @@ def _sanitize_for_json(v):
         return None
 
 
-@router.get("/", response_model=List[dict])
+@router.get("/", response_model=ResponseModel)
 async def list_chats(authorization: str = Header(..., alias="Authorization")):
     """Listar chats del usuario autenticado (simple).
 
@@ -146,12 +146,20 @@ async def list_chats(authorization: str = Header(..., alias="Authorization")):
     chats = []
     async for c in chats_col.find({"user_id": user_oid}).sort("last_updated", -1):
         chats.append(_sanitize_chat_record(c))
-    return chats
+    return ResponseModel(message="Chats listados", data=chats)
 
 
-@router.post("/", response_model=dict)
+@router.post("/", response_model=ResponseModel)
 async def create_chat(
-    body: Dict[str, Any] = Body(...),
+    body: Dict[str, Any] = Body(
+        ...,
+        examples={
+            "basic": {
+                "summary": "Crear chat con mensaje inicial",
+                "value": {"title": "Mi chat", "message": "Hola mundo", "agent_id": None},
+            }
+        },
+    ),
     authorization: str = Header(..., alias="Authorization"),
 ):
     """Crear un chat entre miembros. Body: {"title": "optional"}
@@ -242,10 +250,10 @@ async def create_chat(
             "created_at": now,
         }
         await messages_service.send_message(not_sent, chat_id, manager=manager)
-    return _sanitize_chat_record(chat_doc)
+    return ResponseModel(message="Chat creado", data=_sanitize_chat_record(chat_doc))
 
 
-@router.get("/{chat_id}/messages", response_model=List[dict])
+@router.get("/{chat_id}/messages", response_model=ResponseModel)
 async def list_messages(chat_id: str, authorization: str = Header(..., alias="Authorization")):
     """Listar mensajes de un chat si el usuario es miembro.
 
@@ -278,10 +286,14 @@ async def list_messages(chat_id: str, authorization: str = Header(..., alias="Au
                 msgs.append(_sanitize_for_json(msg))
             except Exception:
                 msgs.append({"_raw": str(msg)})
-    return msgs
+    return ResponseModel(message="Mensajes listados", data=msgs)
 
-@router.post("/{chat_id}/messages", response_model=dict)
-async def post_message(chat_id: str, body: Dict[str, Any] = Body(...), authorization: str = Header(..., alias="Authorization")):
+@router.post("/{chat_id}/messages", response_model=ResponseModel)
+async def post_message(
+    chat_id: str,
+    body: Dict[str, Any] = Body(..., examples={"post": {"value": {"text": "Hola", "parent_id": "<message_id>"}}}),
+    authorization: str = Header(..., alias="Authorization"),
+):
     """Publicar un mensaje en un chat (REST). Body: {"text": "..."}"""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid Authorization header")
@@ -345,7 +357,7 @@ async def post_message(chat_id: str, body: Dict[str, Any] = Body(...), authoriza
         "created_at": now,
     }
     user_msg = await messages_service.process_user_message(chat_oid, user_msg, manager=manager)
-    return _sanitize_message_record(user_msg)
+    return ResponseModel(message="Mensaje publicado", data=_sanitize_message_record(user_msg))
 
 
 class ConnectionManager:

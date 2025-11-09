@@ -38,11 +38,30 @@ async def lifespan(app: FastAPI):
 
 # --- 2. INSTANCIA DE LA APLICACIÓN FASTAPI ---
 # La variable 'app' debe coincidir con el Start Command de Render: uvicorn backend:app
+tags_metadata = [
+    {"name": "Health Check", "description": "Endpoints para comprobar salud de la API."},
+    {"name": "Usuarios", "description": "Autenticación, perfil y gestión de usuario."},
+    {"name": "Agentes", "description": "CRUD y gestión de agentes del usuario."},
+    {"name": "API Keys", "description": "Gestión de claves de proveedor integradas por el usuario."},
+    {"name": "Resources", "description": "MCPs, snippets y recursos asociados al usuario."},
+    {"name": "Chats", "description": "Operaciones de chat y mensajería (REST y WebSocket)."},
+]
+
 app = FastAPI(
     title="InsanusChat Backend",
-    description="Backend asíncrono para chat con ramificaciones (threads) usando FastAPI y MongoDB.",
+    description=(
+        "Backend asíncrono para chat con ramificaciones (threads) usando FastAPI y MongoDB."
+        "\n\nEn la documentación encontrarás ejemplos de request/response, códigos de error y ejemplos"
+        " para cuerpos de petición en los endpoints principales."
+    ),
     version="0.1.0",
-    lifespan=lifespan # Aplicamos el context manager
+    lifespan=lifespan,  # Aplicamos el context manager
+    openapi_tags=tags_metadata,
+    contact={"name": "InsanusTech Team", "email": os.environ.get("MAINTAINER_EMAIL", "valejlorda@insanustech.com.ar")},
+    license_info={"name": "GPL 3.0"},
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
 

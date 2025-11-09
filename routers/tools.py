@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header, Body, Query
 from routers import auth
 import database
-from models import PyObjectId
+from models import PyObjectId, ResponseModel
 from datetime import datetime
 
 router = APIRouter(
@@ -10,7 +10,7 @@ router = APIRouter(
 )
 
 
-@router.get("/")
+@router.get("/", response_model=ResponseModel)
 async def list_tools(authorization: str | None = Header(None)):
     """
     Listar herramientas asociadas al usuario.
@@ -54,14 +54,25 @@ async def list_tools(authorization: str | None = Header(None)):
     mcps_out = [_ser_mcp(m) for m in mcps]
     snippets_out = [_ser_snip(s) for s in snippets]
 
-    return {"message": "Resources listados", "data": {"mcps": mcps_out, "code_snippets": snippets_out}}
+    return ResponseModel(message="Resources listados", data={"mcps": mcps_out, "code_snippets": snippets_out})
 
 
 ## ---------------- MCPs CRUD ----------------
 
 
-@router.post("/mcps")
-async def create_mcp(authorization: str | None = Header(None), body: dict = Body(...)):
+@router.post("/mcps", response_model=ResponseModel)
+async def create_mcp(
+    authorization: str | None = Header(None),
+    body: dict = Body(
+        ...,
+        examples={
+            "basic": {
+                "summary": "Crear MCP ejemplo",
+                "value": {"name": "MCP-Local", "endpoint": "http://localhost:9000", "spec": {}}
+            }
+        },
+    ),
+):
     """Crear un MCP entry para el usuario.
     body esperado: {"name":..., "endpoint":..., "spec":{...}, "auth":{...}, "metadata":{...}}
     """
@@ -104,11 +115,15 @@ async def create_mcp(authorization: str | None = Header(None), body: dict = Body
     out = dict(mcp_doc)
     out["_id"] = str(out["_id"])
     out["registered_at"] = out["registered_at"].isoformat()
-    return {"message": "MCP creado", "data": out}
+    return ResponseModel(message="MCP creado", data=out)
 
 
-@router.put("/mcps")
-async def update_mcp(mcp_id: str | None = Query(None, alias="mcp_id"), authorization: str | None = Header(None), body: dict = Body(...)):
+@router.put("/mcps", response_model=ResponseModel)
+async def update_mcp(
+    mcp_id: str | None = Query(None, alias="mcp_id"),
+    authorization: str | None = Header(None),
+    body: dict = Body(..., examples={"update": {"value": {"name": "Nuevo nombre"}}}),
+):
     """Actualizar MCP del usuario. Campos permitidos: name, endpoint, spec, auth, metadata, active"""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
@@ -159,10 +174,10 @@ async def update_mcp(mcp_id: str | None = Query(None, alias="mcp_id"), authoriza
     mop["_id"] = str(mop["_id"])
     if mop.get("registered_at"):
         mop["registered_at"] = mop["registered_at"].isoformat()
-    return {"message": "MCP actualizado", "data": mop}
+    return ResponseModel(message="MCP actualizado", data=mop)
 
 
-@router.delete("/mcps")
+@router.delete("/mcps", response_model=ResponseModel)
 async def delete_mcp(mcp_id: str | None = Query(None, alias="mcp_id"), authorization: str | None = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
@@ -191,13 +206,16 @@ async def delete_mcp(mcp_id: str | None = Query(None, alias="mcp_id"), authoriza
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"mcps": {"_id": mid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="MCP no encontrado")
-    return {"message": "MCP eliminado", "data": {"id": auth._serialize_doc(mcp)}}
+    return ResponseModel(message="MCP eliminado", data={"id": auth._serialize_doc(mcp)})
 
 ## ---------------- Snippets CRUD ----------------
 
 
-@router.post("/snippets")
-async def create_snippet(authorization: str | None = Header(None), body: dict = Body(...)):
+@router.post("/snippets", response_model=ResponseModel)
+async def create_snippet(
+    authorization: str | None = Header(None),
+    body: dict = Body(..., examples={"example": {"value": {"name": "parse_csv", "language": "python", "code": "def parse_csv(s): ..."}}}),
+):
     """Crear un code snippet para el usuario.
     body: {name, language, code, description?, public?}
     """
@@ -237,11 +255,15 @@ async def create_snippet(authorization: str | None = Header(None), body: dict = 
     out = dict(snip)
     out["_id"] = str(out["_id"])
     out["created_at"] = out["created_at"].isoformat()
-    return {"message": "Snippet creado", "data": out}
+    return ResponseModel(message="Snippet creado", data=out)
 
 
-@router.put("/snippets")
-async def update_snippet(snippet_id: str | None = Query(None, alias="snippet_id"), authorization: str | None = Header(None), body: dict = Body(...)):
+@router.put("/snippets", response_model=ResponseModel)
+async def update_snippet(
+    snippet_id: str | None = Query(None, alias="snippet_id"),
+    authorization: str | None = Header(None),
+    body: dict = Body(..., examples={"update": {"value": {"name": "nuevo", "code": "print(1)"}}}),
+):
     """Actualizar snippet: name, description, code, language, public"""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
@@ -292,10 +314,10 @@ async def update_snippet(snippet_id: str | None = Query(None, alias="snippet_id"
     sop["_id"] = str(sop["_id"])
     if sop.get("created_at"):
         sop["created_at"] = sop["created_at"].isoformat()
-    return {"message": "Snippet actualizado", "data": sop}
+    return ResponseModel(message="Snippet actualizado", data=sop)
 
 
-@router.delete("/snippets")
+@router.delete("/snippets", response_model=ResponseModel)
 async def delete_snippet(snippet_id: str | None = Query(None, alias="snippet_id"), authorization: str | None = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token no provisto")
@@ -324,4 +346,4 @@ async def delete_snippet(snippet_id: str | None = Query(None, alias="snippet_id"
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"code_snippets": {"_id": sid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="Snippet no encontrado")
-    return {"message": "Snippet eliminado", "data": {"id": auth._serialize_doc(snippet)}}
+    return ResponseModel(message="Snippet eliminado", data={"id": auth._serialize_doc(snippet)})

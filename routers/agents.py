@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header, Body, Query
 from routers import auth
 import database
-from models import PyObjectId
+from models import PyObjectId, ResponseModel
 from datetime import datetime
 from typing import List
  
@@ -42,7 +42,7 @@ router = APIRouter(
 )
 
 
-@router.get("/")
+@router.get("/", response_model=ResponseModel)
 async def list_agents(authorization: str | None = Header(None)):
     """Listar agentes del usuario autenticado."""
     if not authorization or not authorization.startswith("Bearer "):
@@ -60,11 +60,22 @@ async def list_agents(authorization: str | None = Header(None)):
     agents = user.get("agents", []) if user else []
     # serializar ObjectId/datetime recursivamente
     out = [_sanitize_value(a) for a in agents]
-    return {"message": "Agentes listados", "data": out}
+    return ResponseModel(message="Agentes listados", data=out)
 
 
-@router.post("/")
-async def create_agent(authorization: str | None = Header(None), payload: dict = Body(...)):
+@router.post("/", response_model=ResponseModel)
+async def create_agent(
+    authorization: str | None = Header(None),
+    payload: dict = Body(
+        ...,
+        examples={
+            "normal": {
+                "summary": "Crear agente sencillo",
+                "value": {"name": "Mi Agent", "description": "Agent de prueba", "system_prompt": ["You are a bot."], "snippets": []},
+            }
+        },
+    ),
+):
     """Crear un agente para el usuario (inserta en `users.agents`).
 
     Payload ejemplo:
@@ -120,11 +131,20 @@ async def create_agent(authorization: str | None = Header(None), payload: dict =
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
     agent_doc_out = _sanitize_value(agent_doc)
-    return {"message": "Agente creado", "data": agent_doc_out}
+    return ResponseModel(message="Agente creado", data=agent_doc_out)
 
 
-@router.put("/")
-async def update_agent(agent_id: str | None = Query(None,alias="agent_id"), authorization: str | None = Header(None), payload: dict | None = Body(None)):
+@router.put("/", response_model=ResponseModel)
+async def update_agent(
+    agent_id: str | None = Query(None, alias="agent_id"),
+    authorization: str | None = Header(None),
+    payload: dict | None = Body(
+        None,
+        examples={
+            "partial": {"summary": "Actualizar nombre y descripción", "value": {"name": "Nuevo nombre", "description": "Descripción"}}
+        },
+    ),
+):
     """Actualizar campos permitidos del agente embebido.
 
     Campos permitidos: name, description, system_prompt (lista), active_tools, active_mcps, model_selected, model_fallback, metadata, active
@@ -194,10 +214,10 @@ async def update_agent(agent_id: str | None = Query(None,alias="agent_id"), auth
         raise HTTPException(status_code=404, detail="Agente no encontrado tras actualización")
     # serializar ids y fechas recursivamente
     agent_out = _sanitize_value(agent)
-    return {"message": "Agente actualizado", "data": agent_out}
+    return ResponseModel(message="Agente actualizado", data=agent_out)
 
 
-@router.delete("/")
+@router.delete("/", response_model=ResponseModel)
 async def delete_agent(agent_id: str | None = Query(None, alias="agent_id"), authorization: str | None = Header(None)):
     """Eliminar (pull) un agente del usuario."""
     if not authorization or not authorization.startswith("Bearer "):
@@ -222,4 +242,4 @@ async def delete_agent(agent_id: str | None = Query(None, alias="agent_id"), aut
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"agents": {"_id": oid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="Agente no encontrado")
-    return {"message": "Agente eliminado", "data": {"id": auth._serialize_doc(agent)}}
+    return ResponseModel(message="Agente eliminado", data={"id": auth._serialize_doc(agent)})

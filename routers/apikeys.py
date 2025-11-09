@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header, Body, Query
 from routers import auth
 import database
-from models import PyObjectId, UserAPIKeyModel
+from models import PyObjectId, UserAPIKeyModel, ResponseModel
 from datetime import datetime
 import logging
 from jose import jwt as jose_jwt
@@ -10,7 +10,7 @@ router = APIRouter(
     tags=["API Keys"],       # Etiqueta para agrupar en la documentación
 )
 
-@router.get("/")
+@router.get("/", response_model=ResponseModel)
 async def list_api_keys(authorization: str | None = Header(None)):
     """
     Endpoint de ejemplo para listar API Keys.
@@ -55,10 +55,21 @@ async def list_api_keys(authorization: str | None = Header(None)):
         if kop.get("last_used") is not None:
             kop["last_used"] = kop["last_used"].isoformat()
         out.append(kop)
-    return {"message": "API keys listadas", "data": out}
+    return ResponseModel(message="API keys listadas", data=out)
 
-@router.post("/")
-async def create_api_key(authorization: str | None = Header(None), body: dict = Body(...)):
+@router.post("/", response_model=ResponseModel)
+async def create_api_key(
+    authorization: str | None = Header(None),
+    body: dict = Body(
+        ...,
+        examples={
+            "example": {
+                "summary": "Crear API Key",
+                "value": {"provider": "openai", "encrypted_key": "<encrypted>", "label": "Mi OpenAI"},
+            }
+        },
+    ),
+):
     """
     Endpoint de ejemplo para crear una nueva API Key.
     """
@@ -113,10 +124,14 @@ async def create_api_key(authorization: str | None = Header(None), body: dict = 
     out = dict(api_key_doc)
     out["_id"] = str(out["_id"])
     out["created_at"] = out["created_at"].isoformat()
-    return {"message": "API key creada", "data": out}
+    return ResponseModel(message="API key creada", data=out)
 
-@router.put("/")
-async def update_api_key(api_key_id: str | None = Query(None, alias="api_key_id"), authorization: str | None = Header(None), body: dict = Body(...)):
+@router.put("/", response_model=ResponseModel)
+async def update_api_key(
+    api_key_id: str | None = Query(None, alias="api_key_id"),
+    authorization: str | None = Header(None),
+    body: dict = Body(..., examples={"update": {"value": {"label": "Nuevo label", "active": True}}}),
+):
     """
     Endpoint de ejemplo para actualizar una API Key.
     """
@@ -189,9 +204,9 @@ async def update_api_key(api_key_id: str | None = Query(None, alias="api_key_id"
         kop["created_at"] = kop["created_at"].isoformat()
     if kop.get("last_used"):
         kop["last_used"] = kop["last_used"].isoformat()
-    return {"message": "API key actualizada", "data": kop}
+    return ResponseModel(message="API key actualizada", data=kop)
 
-@router.delete("/")
+@router.delete("/", response_model=ResponseModel)
 async def delete_api_key(api_key_id: str | None = Query(None, alias="api_key_id"), authorization: str | None = Header(None)):
     """
     Endpoint de ejemplo para eliminar una API Key.
@@ -268,4 +283,4 @@ async def delete_api_key(api_key_id: str | None = Query(None, alias="api_key_id"
         # rollback no posible: informar error
         raise HTTPException(status_code=500, detail="La API key sigue presente tras el intento de borrado")
 
-    return {"message": "API key eliminada", "data": {"deleted": kop}}
+    return ResponseModel(message="API key eliminada", data={"deleted": kop})

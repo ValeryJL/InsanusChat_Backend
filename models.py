@@ -70,7 +70,18 @@ class UserAPIKeyModel(BaseModel):
 
     model_config = {
         "populate_by_name": True,
-        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() },
+        "json_schema_extra": {
+            "example": {
+                "_id": "650f6b9e1c4e4a3f9b0a1234",
+                "provider": "openai",
+                "label": "Mi OpenAI",
+                "encrypted_key": "<encrypted>",
+                "created_at": "2025-11-09T12:34:56Z",
+                "last_used": None,
+                "active": True,
+            }
+        }
     }
 
 
@@ -85,7 +96,18 @@ class CodeSnippetModel(BaseModel):
 
     model_config = {
         "populate_by_name": True,
-        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() },
+        "json_schema_extra": {
+            "example": {
+                "_id": "650f6b9e1c4e4a3f9b0a5678",
+                "name": "parse_csv",
+                "description": "Snippet para parsear CSV",
+                "language": "python",
+                "code": "def parse_csv(s): return [r.split(',') for r in s.splitlines()]",
+                "created_at": "2025-11-09T12:34:56Z",
+                "public": False,
+            }
+        }
     }
 
 
@@ -120,7 +142,26 @@ class MCPEntryModel(BaseModel):
 
     model_config = {
         "populate_by_name": True,
-        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() },
+        "json_schema_extra": {
+            "example": {
+                "_id": "650f6b9e1c4e4a3f9b0a9999",
+                "name": "MCP-Local",
+                "endpoint": "http://localhost:9000",
+                "transport": "http",
+                "command": None,
+                "args": [],
+                "env": {},
+                "local_script_path": None,
+                "working_dir": None,
+                "spec": {"capabilities": ["tools"]},
+                "auth": {"type": "api_key"},
+                "registered_at": "2025-11-09T12:34:56Z",
+                "active": True,
+                "status": "available",
+                "timeout_seconds": 30,
+            }
+        }
     }
 
 
@@ -140,7 +181,18 @@ class AgentSnippetModel(BaseModel):
 
     model_config = {
         "populate_by_name": True,
-        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() },
+        "json_schema_extra": {
+            "example": {
+                "_id": "650f6b9e1c4e4a3f9b0a2222",
+                "name": "now",
+                "language": "javascript",
+                "code": "return Date.now();",
+                "type": "runtime",
+                "metadata": {},
+                "created_at": "2025-11-09T12:34:56Z",
+            }
+        }
     }
 
 class AgentModel(BaseModel):
@@ -162,7 +214,21 @@ class AgentModel(BaseModel):
 
     model_config = {
         "populate_by_name": True,
-        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() },
+        "json_schema_extra": {
+            "example": {
+                "_id": "650f6b9e1c4e4a3f9b0a3333",
+                "name": "weather-agent",
+                "description": "Agente que consulta el servidor de weather",
+                "system_prompt": ["You are a helpful assistant."],
+                "snippets": [],
+                "allowed_tools": ["get_weather"],
+                "spec": {},
+                "metadata": {},
+                "created_at": "2025-11-09T12:34:56Z",
+                "active": True,
+            }
+        }
     }
 
 # -------------------------------------------------
@@ -210,7 +276,24 @@ class MessageModel(BaseModel):
     model_config = {
         "populate_by_name": True,
         "arbitrary_types_allowed": True,
-        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() },
+        "json_schema_extra": {
+            "example": {
+                "_id": "650f6b9e1c4e4a3f9b0a4444",
+                "chat_id": "650f6b9e1c4e4a3f9b0aaaaa",
+                "parent_id": None,
+                "children_ids": [],
+                "path": [],
+                "sender_id": "user_1",
+                "role": "user",
+                "content": "Hola, ¿cómo estás?",
+                "content_type": "text",
+                "status": "done",
+                "tokens_used": 12,
+                "created_at": "2025-11-09T12:34:56Z",
+                "version": 1,
+            }
+        }
     }
 
 
@@ -238,7 +321,22 @@ class ChatModel(BaseModel):
     model_config = {
         "populate_by_name": True,
         "arbitrary_types_allowed": True,
-        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() }
+        "json_encoders": { PyObjectId: str, datetime: lambda v: v.isoformat() },
+        "json_schema_extra": {
+            "example": {
+                "_id": "650f6b9e1c4e4a3f9b0abbbb",
+                "user_id": "user_123",
+                "agent_id": None,
+                "title": "Conversación de ejemplo",
+                "messages": [],
+                "message_count": 0,
+                "metadata": {},
+                "locked": False,
+                "active_tools": [],
+                "created_at": "2025-11-09T12:34:56Z",
+                "last_updated": "2025-11-09T12:34:56Z",
+            }
+        }
     }
 
 
@@ -317,3 +415,11 @@ class ResponseModel(BaseModel):
         except Exception:
             logger.debug("ResponseModel.__init__ called (unable to pretty-print types)")
         super().__init__(**data)
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "message": "Operación exitosa",
+                "data": {"sample": "value"}
+            }
+        }
+    }

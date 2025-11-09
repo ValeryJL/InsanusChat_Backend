@@ -192,7 +192,18 @@ async def get_user_profile(authorization: str | None = Header(None)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/", response_model=ResponseModel)
-async def update_user_profile(authorization: str | None = Header(None), payload: dict | None = None):
+async def update_user_profile(
+    authorization: str | None = Header(None),
+    payload: dict | None = Body(
+        None,
+        examples={
+            "update_profile": {
+                "summary": "Actualizar perfil parcial",
+                "value": {"display_name": "Nuevo Nombre", "settings": {"theme": "dark"}}
+            }
+        },
+    ),
+):
     """
     Actualiza (o crea) el perfil del usuario autenticado usando datos en la base de datos.
     """
@@ -268,7 +279,14 @@ async def update_user_profile(authorization: str | None = Header(None), payload:
 
 
 @router.post("/login", response_model=ResponseModel)
-async def local_login(payload: dict = Body(...)):
+async def local_login(
+    payload: dict = Body(
+        ...,
+        examples={
+            "default": {"summary": "Login local", "value": {"email": "user@example.com", "password": "secret"}}
+        },
+    )
+):
     """
     Login local usando email + password (dev/registro local).
     Devuelve un JWT creado por `auth.auth.create_access_token` con subject = ObjectId del usuario.
@@ -307,7 +325,14 @@ async def local_login(payload: dict = Body(...)):
 
 
 @router.post("/register", response_model=ResponseModel)
-async def register(payload: dict = Body(...)):
+async def register(
+    payload: dict = Body(
+        ...,
+        examples={
+            "default": {"summary": "Registro local", "value": {"email": "user@example.com", "password": "secret", "display_name": "Usuario Demo"}}
+        },
+    )
+):
     """Registrar un usuario local (email + password + display_name). Devuelve token local JWT."""
 
     logger = logging.getLogger(__name__)
