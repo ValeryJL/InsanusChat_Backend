@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Query
 from fastapi import WebSocket, WebSocketDisconnect, status, Body
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -50,7 +50,7 @@ def _sanitize_chat_record(c: dict) -> dict:
     # sanitize embedded messages if present
     if c.get("messages") and isinstance(c.get("messages"), list):
         sanitized = []
-        for m in c.get("messages"):
+        for m in c.get("messages"): # type: ignore
             try:
                 sanitized.append(_sanitize_message_record(m))
             except Exception:
@@ -117,8 +117,8 @@ def _sanitize_for_json(v):
         return [_sanitize_for_json(x) for x in v]
     # fallback: try isoformat then str
     try:
-        if hasattr(v, "isoformat"):
-            return v.isoformat()
+        if v and hasattr(v, "isoformat"):
+            return v.isoformat() # type: ignore
     except Exception:
         pass
     try:
@@ -465,7 +465,7 @@ class ConnectionManager:
                             pass
                     if k in ("created_at", "last_updated"):
                         try:
-                            out[k] = v.isoformat(); continue
+                            out[k] = v.isoformat(); continue # type: ignore
                         except Exception:
                             pass
                     out[k] = _sanitize(v)
@@ -775,8 +775,8 @@ async def websocket_create_chat(websocket: WebSocket):
             logging.exception("websocket_create_chat: error while closing websocket for chat_id=%s in finally", str(chat_id))
 
 
-@router.websocket("/ws/{chat_id}")
-async def websocket_endpoint(websocket: WebSocket, chat_id: str):
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, chat_id: str | None = Query(None, alias="chat_id")):
     """WebSocket que requiere ?token=<jwt> en la query string para autenticar.
 
     El usuario autenticado debe pertenecer al chat. Los mensajes enviados por WS deben
@@ -797,6 +797,11 @@ async def websocket_endpoint(websocket: WebSocket, chat_id: str):
         return
 
     logging.info("websocket_endpoint: connection request for chat_id=%s uid=%s", str(chat_id), str(uid))
+
+    if not chat_id:
+        logging.warning("websocket_endpoint: missing chat_id query parameter for uid=%s", str(uid))
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
 
     chat_oid = PyObjectId.parse(chat_id)
     chats_col = database.get_chat_collection()

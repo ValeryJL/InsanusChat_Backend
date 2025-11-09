@@ -250,7 +250,7 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
 
     Soporta comandos JSON entrantes con la forma:
       {"cmd": "send", "text": "...", "parent_id": "<id>"}
-      {"cmd": "fetch_from_top", "id": "<message_id>", "limit": 16, "direction": "left"}
+      {"cmd": "fetch_from_top", "id": "<message_id>", "limit": 16}
       {"cmd": "fetch_from_bottom", "id": "<message_id>", "limit": 16}
       {"cmd": "get", "id": "<message_id>"}
       {"cmd": "ping"}
