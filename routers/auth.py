@@ -11,6 +11,7 @@ from datetime import datetime
 from pymongo import ReturnDocument
 from auth.auth import verify_password, create_access_token, decode_access_token, get_password_hash
 import re
+from bson import ObjectId
 
 # Cargar variables de entorno desde .env (busca en el proyecto)
 load_dotenv(find_dotenv())
@@ -50,13 +51,23 @@ def _serialize_doc(doc: dict) -> dict:
     out = dict(doc)
     if "_id" in out:
         try:
-            # Intentar parsear a ObjectId; si funciona, serializamos
-            parsed = PyObjectId.parse(out["_id"])
-            out["_id"] = str(parsed)
+            # Si es un ObjectId de bson, convertir a str directamente
+            if isinstance(out["_id"], ObjectId):
+                out["_id"] = str(out["_id"])
+            else:
+                # Intentar parsear a PyObjectId; si funciona, serializamos
+                parsed = PyObjectId.parse(out["_id"])
+                out["_id"] = str(parsed)
         except Exception:
-            # si no es convertible, lo dejamos tal cual
-            pass
+            # Como fallback, intentar forzar a str
+            try:
+                out["_id"] = str(out["_id"])
+            except Exception:
+                pass
     for k, v in list(out.items()):
+        # Convertir cualquier ObjectId en otros campos
+        if isinstance(v, ObjectId):
+            out[k] = str(v)
         if isinstance(v, datetime):
             out[k] = v.isoformat()
     return out
