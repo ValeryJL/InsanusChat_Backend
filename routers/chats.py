@@ -5,7 +5,7 @@ from datetime import datetime
 import asyncio
 import logging
 import database
-from models import PyObjectId, ResponseModel
+from models import PyObjectId, ResponseModel, ChatListResponse, ChatResponse, MessagesResponse, MessageResponse
 from routers import auth
 from services import agents as agents_service
 from services import messages as messages_service
@@ -127,7 +127,7 @@ def _sanitize_for_json(v):
         return None
 
 
-@router.get("/", response_model=ResponseModel)
+@router.get("/", response_model=ChatListResponse)
 async def list_chats(authorization: str = Header(..., alias="Authorization")):
     """Listar chats del usuario autenticado (simple).
 
@@ -146,10 +146,10 @@ async def list_chats(authorization: str = Header(..., alias="Authorization")):
     chats = []
     async for c in chats_col.find({"user_id": user_oid}).sort("last_updated", -1):
         chats.append(_sanitize_chat_record(c))
-    return ResponseModel(message="Chats listados", data=chats)
+    return ChatListResponse(message="Chats listados", data=chats)
 
 
-@router.post("/", response_model=ResponseModel)
+@router.post("/", response_model=ChatResponse)
 async def create_chat(
     body: Dict[str, Any] = Body(
         ...,
@@ -250,10 +250,10 @@ async def create_chat(
             "created_at": now,
         }
         await messages_service.send_message(not_sent, chat_id, manager=manager)
-    return ResponseModel(message="Chat creado", data=_sanitize_chat_record(chat_doc))
+    return ChatResponse(message="Chat creado", data=_sanitize_chat_record(chat_doc))
 
 
-@router.get("/{chat_id}/messages", response_model=ResponseModel)
+@router.get("/{chat_id}/messages", response_model=MessagesResponse)
 async def list_messages(chat_id: str, authorization: str = Header(..., alias="Authorization")):
     """Listar mensajes de un chat si el usuario es miembro.
 
@@ -286,9 +286,9 @@ async def list_messages(chat_id: str, authorization: str = Header(..., alias="Au
                 msgs.append(_sanitize_for_json(msg))
             except Exception:
                 msgs.append({"_raw": str(msg)})
-    return ResponseModel(message="Mensajes listados", data=msgs)
+    return MessagesResponse(message="Mensajes listados", data=msgs)
 
-@router.post("/{chat_id}/messages", response_model=ResponseModel)
+@router.post("/{chat_id}/messages", response_model=MessageResponse)
 async def post_message(
     chat_id: str,
     body: Dict[str, Any] = Body(..., examples={"post": {"value": {"text": "Hola", "parent_id": "<message_id>"}}}),
@@ -357,7 +357,7 @@ async def post_message(
         "created_at": now,
     }
     user_msg = await messages_service.process_user_message(chat_oid, user_msg, manager=manager)
-    return ResponseModel(message="Mensaje publicado", data=_sanitize_message_record(user_msg))
+    return MessageResponse(message="Mensaje publicado", data=_sanitize_message_record(user_msg))
 
 
 class ConnectionManager:

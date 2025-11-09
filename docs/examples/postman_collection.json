@@ -1,0 +1,62 @@
+{
+  "info": {
+    "name": "InsanusChat Backend - Minimal",
+    "_postman_id": "insanuschat-minimal",
+    "description": "Colección mínima con ejemplos para endpoints principales.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth - Register",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"secret\",\n  \"display_name\": \"Usuario Demo\"\n}" },
+        "url": "{{base_url}}/api/v1/auth/register"
+      },
+      "response": []
+    },
+    {
+      "name": "Auth - Login",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"secret\"\n}" },
+        "url": "{{base_url}}/api/v1/auth/login"
+      },
+      "response": []
+    },
+    {
+      "name": "API Keys - List",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{base_url}}/api/v1/apikeys/"
+      },
+      "response": []
+    },
+    {
+      "name": "Agents - List",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+        "url": "{{base_url}}/api/v1/agents/"
+      },
+      "response": []
+    },
+    {
+      "name": "Chats - Create",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }, { "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n  \"title\": \"Mi chat\",\n  \"message\": \"Hola, quiero probar el agente\"\n}" },
+        "url": "{{base_url}}/api/v1/chats/"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    { "key": "base_url", "value": "http://127.0.0.1:8000" },
+    { "key": "token", "value": "<JWT_TOKEN>" }
+  ]
+}

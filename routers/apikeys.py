@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header, Body, Query
 from routers import auth
 import database
-from models import PyObjectId, UserAPIKeyModel, ResponseModel
+from models import PyObjectId, UserAPIKeyModel, ResponseModel, APIKeyListResponse, APIKeyResponse
 from datetime import datetime
 import logging
 from jose import jwt as jose_jwt
@@ -10,7 +10,7 @@ router = APIRouter(
     tags=["API Keys"],       # Etiqueta para agrupar en la documentación
 )
 
-@router.get("/", response_model=ResponseModel)
+@router.get("/", response_model=APIKeyListResponse)
 async def list_api_keys(authorization: str | None = Header(None)):
     """
     Endpoint de ejemplo para listar API Keys.
@@ -57,7 +57,7 @@ async def list_api_keys(authorization: str | None = Header(None)):
         out.append(kop)
     return ResponseModel(message="API keys listadas", data=out)
 
-@router.post("/", response_model=ResponseModel)
+@router.post("/", response_model=APIKeyResponse)
 async def create_api_key(
     authorization: str | None = Header(None),
     body: dict = Body(
@@ -126,7 +126,7 @@ async def create_api_key(
     out["created_at"] = out["created_at"].isoformat()
     return ResponseModel(message="API key creada", data=out)
 
-@router.put("/", response_model=ResponseModel)
+@router.put("/", response_model=APIKeyResponse)
 async def update_api_key(
     api_key_id: str | None = Query(None, alias="api_key_id"),
     authorization: str | None = Header(None),
@@ -206,7 +206,7 @@ async def update_api_key(
         kop["last_used"] = kop["last_used"].isoformat()
     return ResponseModel(message="API key actualizada", data=kop)
 
-@router.delete("/", response_model=ResponseModel)
+@router.delete("/", response_model=APIKeyResponse)
 async def delete_api_key(api_key_id: str | None = Query(None, alias="api_key_id"), authorization: str | None = Header(None)):
     """
     Endpoint de ejemplo para eliminar una API Key.

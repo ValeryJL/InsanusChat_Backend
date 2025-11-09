@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header, Body, Query
 from routers import auth
 import database
-from models import PyObjectId, ResponseModel
+from models import PyObjectId, ResponseModel, AgentListResponse, AgentResponse
 from datetime import datetime
 from typing import List
  
@@ -42,7 +42,7 @@ router = APIRouter(
 )
 
 
-@router.get("/", response_model=ResponseModel)
+@router.get("/", response_model=AgentListResponse)
 async def list_agents(authorization: str | None = Header(None)):
     """Listar agentes del usuario autenticado."""
     if not authorization or not authorization.startswith("Bearer "):
@@ -63,7 +63,7 @@ async def list_agents(authorization: str | None = Header(None)):
     return ResponseModel(message="Agentes listados", data=out)
 
 
-@router.post("/", response_model=ResponseModel)
+@router.post("/", response_model=AgentResponse)
 async def create_agent(
     authorization: str | None = Header(None),
     payload: dict = Body(
@@ -134,7 +134,7 @@ async def create_agent(
     return ResponseModel(message="Agente creado", data=agent_doc_out)
 
 
-@router.put("/", response_model=ResponseModel)
+@router.put("/", response_model=AgentResponse)
 async def update_agent(
     agent_id: str | None = Query(None, alias="agent_id"),
     authorization: str | None = Header(None),
@@ -217,7 +217,7 @@ async def update_agent(
     return ResponseModel(message="Agente actualizado", data=agent_out)
 
 
-@router.delete("/", response_model=ResponseModel)
+@router.delete("/", response_model=AgentResponse)
 async def delete_agent(agent_id: str | None = Query(None, alias="agent_id"), authorization: str | None = Header(None)):
     """Eliminar (pull) un agente del usuario."""
     if not authorization or not authorization.startswith("Bearer "):

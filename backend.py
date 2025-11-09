@@ -7,6 +7,8 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from routers import auth, apikeys, agents, chats, tools
 import database
+from fastapi.openapi.utils import get_openapi
+import json
 
 # Cargar .env automáticamente (si existe) para poblar os.environ
 load_dotenv()
@@ -106,3 +108,75 @@ if __name__ == "__main__":
     # Nota: Render usará el 'Start Command' (uvicorn backend:app...)
     # Por lo tanto, esta sección no se ejecuta en el despliegue de Render, solo localmente.
     uvicorn.run("backend:app", host="0.0.0.0", port=8000, reload=True)
+
+
+# Custom OpenAPI: inyecta servers y un ejemplo de curl en cada operación como extensión x-curl.
+def _build_curl_for_operation(path: str, method: str, operation: dict, server_url: str) -> str:
+    """Construye un comando curl sencillo para una operación OpenAPI.
+    Usa el primer ejemplo disponible en requestBody (application/json) si existe.
+    """
+    method_upper = method.upper()
+    url = server_url.rstrip("/") + path
+
+    # Cabeceras por defecto
+    headers = [
+        '"Content-Type: application/json"',
+        '"Authorization: Bearer <TOKEN>"'
+    ]
+
+    # Intentar extraer ejemplo de requestBody
+    data_payload = None
+    rb = operation.get("requestBody") or {}
+    if rb:
+        content = rb.get("content", {}).get("application/json", {})
+        if content:
+            # ejemplos: preferir content.examples -> first example value
+            examples = content.get("examples")
+            if examples and isinstance(examples, dict):
+                first = next(iter(examples.values()))
+                data_payload = first.get("value")
+            elif "example" in content:
+                data_payload = content.get("example")
+
+    curl = f'curl -X {method_upper} "{url}"'
+    for h in headers:
+        curl += f' -H {h}'
+    if data_payload is not None:
+        try:
+            body = json.dumps(data_payload, ensure_ascii=False)
+            # escape single quotes for safe shell usage
+            body_escaped = body.replace("'", "'\"'\"'")
+            curl += f" -d '{body_escaped}'"
+        except Exception:
+            # fallback: include a placeholder
+            curl += " -d '{\"example\":true}'"
+    return curl
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+
+    # Inyectar servers
+    server_url = os.environ.get("BASE_URL", "http://127.0.0.1:8000")
+    openapi_schema["servers"] = [{"url": server_url, "description": "Default server"}]
+
+    # Añadir x-curl a cada operación
+    paths = openapi_schema.get("paths", {})
+    for path, methods in paths.items():
+        for method, operation in list(methods.items()):
+            if method.lower() not in ("get", "post", "put", "delete", "patch", "options", "head"):
+                continue
+            try:
+                curl = _build_curl_for_operation(path, method, operation, server_url)
+                operation["x-curl"] = curl
+            except Exception:
+                logging.exception("Failed to build curl for %s %s", method, path)
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+# Sobrescribir la función openapi de FastAPI
+app.openapi = custom_openapi

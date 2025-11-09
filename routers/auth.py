@@ -2,7 +2,7 @@ import os
 from typing import Any, Optional, List, Dict 
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Header, Body
-from models import PyObjectId, UserModel, ResponseModel
+from models import PyObjectId, UserModel, ResponseModel, AuthTokenResponse, UserResponse
 from pydantic import BaseModel, Field
 import logging
 from dotenv import load_dotenv, find_dotenv
@@ -107,7 +107,7 @@ class AuthUserModel(BaseModel):
 # Nota: usamos `AuthUserModel` para respuestas y validación de DB.
 # Para las actualizaciones aceptamos un payload parcial (dict) con campos permitidos.
 
-@router.post("/", response_model=ResponseModel)
+@router.post("/", response_model=AuthTokenResponse)
 async def verify_token(authorization: Optional[str] = Header(None)):
     """
     Verifica un token local (Authorization: Bearer <token>). Devuelve payload decodificado.
@@ -132,7 +132,7 @@ async def verify_token(authorization: Optional[str] = Header(None)):
         logging.exception("Error verificando token")
         raise HTTPException(status_code=401, detail=str(e))
     
-@router.get("/", response_model=ResponseModel)
+@router.get("/", response_model=UserResponse)
 async def get_user_profile(authorization: str | None = Header(None)):
     """
     Devuelve el perfil del usuario. Si se pasa `uid` devuelve ese usuario.
@@ -191,7 +191,7 @@ async def get_user_profile(authorization: str | None = Header(None)):
         logger.exception("Error recuperando usuario")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/", response_model=ResponseModel)
+@router.put("/", response_model=UserResponse)
 async def update_user_profile(
     authorization: str | None = Header(None),
     payload: dict | None = Body(
@@ -278,7 +278,7 @@ async def update_user_profile(
     return ResponseModel(message="Usuario actualizado", data=_serialize_doc(auth_user.model_dump()))
 
 
-@router.post("/login", response_model=ResponseModel)
+@router.post("/login", response_model=AuthTokenResponse)
 async def local_login(
     payload: dict = Body(
         ...,
