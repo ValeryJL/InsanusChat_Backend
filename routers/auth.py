@@ -136,8 +136,8 @@ async def get_user_profile(authorization: str | None = Header(None)):
 
         # Limitar la respuesta a los campos de AuthUserModel
         auth_user = AuthUserModel.model_validate(_serialize_doc(user_doc))
-        return ResponseModel(message="Perfil recuperado", data=_serialize_doc(auth_user))
-    except HTTPException:
+        return ResponseModel(message="Perfil recuperado", data=_serialize_doc(auth_user.model_dump()))
+    except HTTPException:   
         raise
     except Exception as e:
         logging.exception("Error recuperando usuario")
