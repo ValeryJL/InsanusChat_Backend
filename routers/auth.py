@@ -3,7 +3,7 @@ from typing import Any, Optional, List, Dict
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Header, Body
 from models import PyObjectId, UserModel, ResponseModel
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 import logging
 from dotenv import load_dotenv, find_dotenv
 import database
@@ -74,7 +74,7 @@ class AuthUserModel(BaseModel):
     Versión ligera del usuario usada por endpoints de autenticación (no incluye mcps, chats, api_keys, agents).
     """
     id: PyObjectId = Field(alias="_id")
-    email: EmailStr
+    email: str
     display_name: Optional[str] = None
     created_at: datetime
     last_login: Optional[datetime] = None
@@ -211,7 +211,7 @@ async def update_user_profile(authorization: str | None = Header(None), payload:
 
     # Validar/limitar la respuesta con AuthUserModel
     auth_user = AuthUserModel.model_validate(_serialize_doc(updated))
-    return ResponseModel(message="Usuario actualizado", data=auth_user.model_dump())
+    return ResponseModel(message="Usuario actualizado", data=_serialize_doc(auth_user.model_dump()))
 
 
 @router.post("/login", response_model=ResponseModel)
