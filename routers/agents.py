@@ -216,7 +216,10 @@ async def delete_agent(agent_id: str | None = Query(None, alias="agent_id"), aut
         raise HTTPException(status_code=400, detail="agent_id inválido")
 
     coll = database.get_user_collection()
+    agent = await coll.find_one({"_id": user_oid, "agents._id": oid}, {"agents.$": 1})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agente no encontrado o no pertenece al usuario")
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"agents": {"_id": oid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="Agente no encontrado")
-    return {"message": "Agente eliminado", "data": {"id": agent_id}}
+    return {"message": "Agente eliminado", "data": {"id": auth._serialize_doc(agent)}}
