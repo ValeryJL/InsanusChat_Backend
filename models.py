@@ -3,6 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, EmailStr
 from pydantic_core import PydanticCustomError, core_schema
 from bson import ObjectId
+import logging
 
 # -------------------------------------------------
 # Helper: PyObjectId (compatible con Pydantic v2)
@@ -34,7 +35,9 @@ class PyObjectId:
         Útil para crear ids desde el código que prepara documentos para la DB
         manteniendo coherencia con el tipo usado en los modelos Pydantic.
         """
-        return ObjectId()
+        oid = ObjectId()
+        logging.getLogger(__name__).debug("PyObjectId.new() -> %s", oid)
+        return oid
 
     @classmethod
     def parse(cls, v):
@@ -43,9 +46,14 @@ class PyObjectId:
         Si `v` ya es un ObjectId lo devuelve tal cual, si es str intenta
         convertirlo, y en caso de fallo propaga la excepción.
         """
+        logger = logging.getLogger(__name__)
+        logger.debug("PyObjectId.parse input: %s (type=%s)", v, type(v))
         if isinstance(v, ObjectId):
+            logger.debug("PyObjectId.parse - input is already ObjectId: %s", v)
             return v
-        return ObjectId(str(v))
+        parsed = ObjectId(str(v))
+        logger.debug("PyObjectId.parse -> %s", parsed)
+        return parsed
 
 
 # -------------------------------------------------
@@ -84,12 +92,31 @@ class CodeSnippetModel(BaseModel):
 class MCPEntryModel(BaseModel):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     name: str = Field(..., description="Nombre del MCP server")
-    endpoint: str = Field(..., description="URL base del MCP server")
+    # Endpoint usado para transportes de red (http/sse/ws). No obligatorio para STDIO transport.
+    endpoint: Optional[str] = Field(None, description="URL base del MCP server (para transportes HTTP/SSE/WS)")
+    # Transporte soportado por el registro: 'stdio' (arranca proceso local), 'sse', 'http', 'websocket'
+    transport: Literal["stdio", "sse", "http", "websocket"] = Field("stdio", description="Tipo de transporte usado para conectar al MCP server")
+    # Comando local y argumentos (útil cuando transport='stdio' y el servidor se arranca como proceso)
+    command: Optional[str] = Field(None, description="Comando/executable para lanzar el servidor (ej. python/node). Si está vacío, se inferirá desde la extensión del script)")
+    args: List[str] = Field(default_factory=list, description="Argumentos para el comando cuando se usa transporte STDIO")
+    # Opciones de entorno (por seguridad no almacenar secretos en claro; preferir referencias a vault)
+    env: Dict[str, str] = Field(default_factory=dict, description="Variables de entorno a pasar al proceso/transport")
+    # Ruta local al script (útil para STDIO) y directorio de trabajo
+    local_script_path: Optional[str] = Field(None, description="Ruta local al script del servidor (ej. /path/to/server.py)")
+    working_dir: Optional[str] = Field(None, description="Directorio de trabajo cuando se lanza el proceso STDIO")
+
     spec: Dict[str, Any] = Field(default_factory=dict)
-    auth: Optional[Dict[str, Any]] = Field(None, description="Método de auth (no almacenar secretos sin encriptado)")
+    # auth puede contener metadatos sobre el método (tipo: api_key, oauth, x509) pero evitar guardar secretos en texto
+    auth: Optional[Dict[str, Any]] = Field(None, description="Método de auth (no almacenar secretos sin encriptado). Preferir referencias a credenciales seguras")
+    # SSL / TLS details (paths, verify flags) cuando se usan transportes de red
+    ssl: Optional[Dict[str, Any]] = Field(None, description="Opciones TLS/SSL (ej. {'verify': True, 'cert_path': '/path/to/cert.pem'})")
     metadata: Dict[str, Any] = Field(default_factory=dict)
     registered_at: datetime = Field(default_factory=datetime.utcnow)
     active: bool = Field(True)
+    # Estado de conectividad y datos operativos
+    status: Literal["unknown", "available", "unreachable", "disabled"] = Field("unknown", description="Estado observado del endpoint/transport")
+    timeout_seconds: int = Field(30, description="Timeout por defecto para llamadas relacionadas con este MCP (segundos)")
+    last_connected_at: Optional[datetime] = Field(None, description="Última vez que se intentó/estableció conexión")
 
     model_config = {
         "populate_by_name": True,
@@ -101,7 +128,7 @@ class AgentSnippetModel(BaseModel):
     """Snippet que puede inyectarse en el prompt del agente.
 
     El campo `language` permite identificar si es JS/Python/texto; el backend puede
-    decidir cómo renderizar/ejecutar el snippet (por ahora se trata como texto).
+    decidir cómo renderizar/ejecutar el snippet.
     """
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     name: str = Field(..., description="Nombre del snippet")
@@ -127,6 +154,8 @@ class AgentModel(BaseModel):
     # snippets embebidos que pueden ser referenciados desde `system_prompt`.
     snippets: List[AgentSnippetModel] = Field(default_factory=list)
     spec: Dict[str, Any] = Field(default_factory=dict)  # configuración/plantilla adicional del agente
+    # Lista de nombres o IDs de herramientas permitidas para este agente (control de permisos)
+    allowed_tools: List[str] = Field(default_factory=list, description="Nombres o IDs de herramientas que este agente puede invocar")
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     active: bool = Field(True)
@@ -202,6 +231,7 @@ class ChatModel(BaseModel):
     # Cuando hay un agente procesando una respuesta, marcamos el chat como bloqueado
     # para evitar escrituras concurrentes que puedan crear ramas indeseadas.
     locked: bool = Field(False, description="Flag que indica si el chat está bloqueado para nuevas escrituras mientras un agente procesa")
+    active_tools: List[PyObjectId] = Field(default_factory=list, description="IDs de herramientas activas para este chat")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_updated: Optional[datetime] = None
 
@@ -242,18 +272,32 @@ class UserModel(BaseModel):
                 "email": "usuario@ejemplo.com",
                 "display_name": "Valeria Developer",
                 "mcps": [
-                    {
-                        "name": "MCP-Local",
-                        "endpoint": "https://mcp.example.com",
-                        "spec": {"capabilities": ["tools", "files"]},
-                        "metadata": {"env": "dev"}
-                    }
-                ],
+                        {
+                            "name": "MCP-Local",
+                            "transport": "stdio",
+                            "local_script_path": "/opt/mcp_servers/weather_server/weather.py",
+                            "command": "python3",
+                            "args": ["/opt/mcp_servers/weather_server/weather.py"],
+                            "working_dir": "/opt/mcp_servers/weather_server",
+                            "env": {"ANTHROPIC_API_KEY": "<set-in-env-or-vault>"},
+                            "spec": {"capabilities": ["tools", "files"]},
+                            "metadata": {"env": "dev"},
+                            "timeout_seconds": 30,
+                            "status": "available"
+                        }
+                    ],
                 "code_snippets": [
                     {"name": "parse_csv", "language": "python", "code": "def parse_csv(s): ..."}
                 ],
                 "api_keys": [
                     {"provider": "gemini", "label": "Mi Gemini", "encrypted_key": "<encrypted>"}
+                ],
+                "agents": [
+                    {
+                        "name": "weather-agent",
+                        "description": "Agente que consulta el servidor de weather",
+                        "allowed_tools": ["get_weather", "list_locations"]
+                    }
                 ]
             }
         }
@@ -264,3 +308,12 @@ class ResponseModel(BaseModel):
     """Modelo básico para respuestas HTTP."""
     message: str = "Operación exitosa"
     data: Optional[Dict] = None
+    
+    def __init__(self, **data: Any):
+        logger = logging.getLogger(__name__)
+        try:
+            logger.debug("ResponseModel.__init__ called with keys=%s types=%s",
+                         list(data.keys()), {k: type(v).__name__ for k, v in data.items()})
+        except Exception:
+            logger.debug("ResponseModel.__init__ called (unable to pretty-print types)")
+        super().__init__(**data)

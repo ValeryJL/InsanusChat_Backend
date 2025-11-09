@@ -33,6 +33,8 @@ def authenticate_token(token: str):
     Devuelve: {"auth_type": "local", "user_id": str, "uid": str, "payload": {...}}
     Lanzará HTTPException(401) si el token no es válido.
     """
+    logger = logging.getLogger(__name__)
+    logger.debug("authenticate_token called (preview 64): %s", (token[:64] if isinstance(token, str) else token))
     try:
         payload = decode_access_token(token)
         sub = payload.get("sub")
@@ -50,20 +52,34 @@ def _serialize_doc(doc: Any) -> Any:
     Convierte recursivamente bson.ObjectId -> str y datetime -> ISO en todo el documento.
     Devuelve una estructura nueva (dict/list/primitive) segura para Pydantic/JSON.
     """
+    logger = logging.getLogger(__name__)
+    logger.debug("_serialize_doc called with type=%s", type(doc))
     def convert(obj: Any) -> Any:
         # Objetos atómicos
-        if isinstance(obj, str):
-            return obj
-        if isinstance(obj, PyObjectId):
-            return str(obj)
-        if isinstance(obj, datetime):
-            return obj.isoformat()
-        # Estructuras compuestas
-        if isinstance(obj, dict):
-            return {k: convert(v) for k, v in obj.items()}
-        if isinstance(obj, (list, tuple, set)):
-            converted = [convert(v) for v in obj]
-            return type(obj)(converted) if not isinstance(obj, tuple) else tuple(converted)
+        try:
+            if isinstance(obj, (str, int, float, bool)) or obj is None:
+                return obj
+            # bson.ObjectId (runtime instances) o PyObjectId
+            if isinstance(obj, (ObjectId, PyObjectId)):
+                logger.debug("_serialize_doc.convert - converting ObjectId/PyObjectId: %s (type=%s)", obj, type(obj))
+                return str(obj)
+            if isinstance(obj, datetime):
+                logger.debug("_serialize_doc.convert - converting datetime: %s", obj)
+                return obj.isoformat()
+            # Estructuras compuestas
+            if isinstance(obj, dict):
+                logger.debug("_serialize_doc.convert - dict with %d keys", len(obj))
+                return {k: convert(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple, set)):
+                logger.debug("_serialize_doc.convert - iterable of length %d (type=%s)", len(obj), type(obj))
+                converted = [convert(v) for v in obj]
+                if isinstance(obj, tuple):
+                    return tuple(converted)
+                if isinstance(obj, set):
+                    return set(converted)
+                return converted
+        except Exception as e:
+            logger.exception("_serialize_doc.convert error for obj type %s: %s", type(obj), e)
         # Otros tipos (int, str, float, bool, None, etc.)
         return obj
 
@@ -96,7 +112,11 @@ async def verify_token(authorization: Optional[str] = Header(None)):
     """
     Verifica un token local (Authorization: Bearer <token>). Devuelve payload decodificado.
     """
+    logger = logging.getLogger(__name__)
+    logger.info("POST /api/v1/auth/ verify_token called")
+    logger.debug("Authorization header: %s", authorization)
     if not authorization or not authorization.startswith("Bearer "):
+        logger.warning("verify_token - token missing/invalid format")
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
     try:
@@ -118,29 +138,57 @@ async def get_user_profile(authorization: str | None = Header(None)):
     Devuelve el perfil del usuario. Si se pasa `uid` devuelve ese usuario.
     Si no se pasa `uid`, requiere Authorization y devuelve el perfil del usuario autenticado.
     """
+    logger = logging.getLogger(__name__)
+    logger.info("GET /api/v1/auth/ - start get_user_profile")
+    logger.debug("Authorization header raw: %s", authorization)
     try:
         coll = database.get_user_collection()
         if not authorization or not authorization.startswith("Bearer "):
+            logger.warning("Token no provisto o formato incorrecto")
             raise HTTPException(status_code=401, detail="Token no provisto")
         token = authorization.split(" ", 1)[1]
+        logger.info("Token extraido (preview 64): %s", token[:64])
         decoded = authenticate_token(token)
+        logger.debug("Token decodificado: %s", decoded)
+
         # Token local: buscar por _id
         try:
-            oid = PyObjectId.parse(decoded.get("user_id"))
-        except Exception:
+            user_id_raw = decoded.get("user_id")
+            logger.debug("user_id raw from token: %s (type=%s)", user_id_raw, type(user_id_raw))
+            oid = PyObjectId.parse(user_id_raw)
+            logger.info("Parsed user_id -> ObjectId: %s", oid)
+        except Exception as e:
+            logger.exception("Error parseando user_id desde token")
             raise HTTPException(status_code=400, detail="user id inválido")
+
+        logger.debug("Buscando usuario en collecion por _id: %s", oid)
         user_doc = await coll.find_one({"_id": oid})
+        logger.debug("Resultado find_one user_doc type=%s", type(user_doc))
+        logger.debug("user_doc keys: %s", list(user_doc.keys()) if user_doc else None)
+        logger.debug("user_doc preview: %s", {k: (str(v) if isinstance(v, (ObjectId, PyObjectId, datetime)) else v) for k, v in (user_doc.items() if user_doc else [])})
 
         if not user_doc:
+            logger.warning("Usuario no encontrado para _id=%s", oid)
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
         # Limitar la respuesta a los campos de AuthUserModel
-        auth_user = AuthUserModel.model_validate(_serialize_doc(user_doc))
-        return ResponseModel(message="Perfil recuperado", data=_serialize_doc(auth_user.model_dump()))
-    except HTTPException:   
+        logger.info("Validando user_doc con AuthUserModel")
+        safe_doc = _serialize_doc(user_doc)
+        logger.debug("safe_doc type=%s keys=%s", type(safe_doc), list(safe_doc.keys()))
+        auth_user = AuthUserModel.model_validate(safe_doc)
+        logger.debug("AuthUserModel instance created: %s", auth_user)
+        dumped = auth_user.model_dump()
+        logger.debug("AuthUserModel.model_dump() keys=%s types=%s", list(dumped.keys()), {k: type(v).__name__ for k, v in dumped.items()})
+        serialized = _serialize_doc(dumped)
+        logger.info("User profile serialized, returning response")
+        logger.debug("Response data preview: %s", serialized)
+
+        return ResponseModel(message="Perfil recuperado", data=serialized)
+    except HTTPException:
+        logger.info("Raising HTTPException from get_user_profile")
         raise
     except Exception as e:
-        logging.exception("Error recuperando usuario")
+        logger.exception("Error recuperando usuario")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/", response_model=ResponseModel)
@@ -148,7 +196,12 @@ async def update_user_profile(authorization: str | None = Header(None), payload:
     """
     Actualiza (o crea) el perfil del usuario autenticado usando datos en la base de datos.
     """
+    logger = logging.getLogger(__name__)
+    logger.info("PUT /api/v1/auth/ update_user_profile called")
+    logger.debug("Authorization header: %s", authorization)
+    logger.debug("Payload preview: %s", payload)
     if not authorization or not authorization.startswith("Bearer "):
+        logger.warning("update_user_profile - token missing/invalid format")
         raise HTTPException(status_code=401, detail="Token no provisto")
     token = authorization.split(" ", 1)[1]
     decoded = authenticate_token(token)
@@ -220,6 +273,9 @@ async def local_login(payload: dict = Body(...)):
     Login local usando email + password (dev/registro local).
     Devuelve un JWT creado por `auth.auth.create_access_token` con subject = ObjectId del usuario.
     """
+    logger = logging.getLogger(__name__)
+    logger.info("POST /api/v1/auth/login called")
+    logger.debug("Payload keys: %s", list(payload.keys()) if isinstance(payload, dict) else str(type(payload)))
     email = payload.get("email")
     password = payload.get("password")
     if not email or not password:
@@ -254,6 +310,9 @@ async def local_login(payload: dict = Body(...)):
 async def register(payload: dict = Body(...)):
     """Registrar un usuario local (email + password + display_name). Devuelve token local JWT."""
 
+    logger = logging.getLogger(__name__)
+    logger.info("POST /api/v1/auth/register called")
+    logger.debug("Register payload keys: %s", list(payload.keys()) if isinstance(payload, dict) else str(type(payload)))
     email = payload.get("email")
     password = payload.get("password")
     display_name = payload.get("display_name") or payload.get("name")
