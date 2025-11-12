@@ -189,6 +189,11 @@ Breve referencia (ejemplos mínimos) para usar las APIs REST y WebSocket del bac
     {"cmd": "ping"}
     ```
 
+  - Close
+    ```json
+    {"cmd": "close/disconnect"}
+    ```
+
   ### Formato de sobres salientes (servidor -> cliente)
   El servidor envía sobres JSON textuales (siempre `send_text` con JSON string). Secuencia típica al persistir un mensaje:
 
