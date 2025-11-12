@@ -596,38 +596,127 @@ manager = ConnectionManager()
 
 
 @router.websocket("/ws")
-async def websocket_create_chat(websocket: WebSocket):
-    """Crear un chat vía WebSocket. Espera un primer mensaje JSON con al menos:
-    {"message": "...", "title": "... (opcional)", "metadata": {...} , "agent_id": "... (opcional)"}
-    Responde con el chat creado o un error y cierra la conexión.
+async def websocket_unified(websocket: WebSocket):
+    """Manejador unificado para WebSocket:
+    - Si se pasa query param `chat_id` -> unirse a chat existente (envía init history y delega a websocket_handler)
+    - Si no se pasa `chat_id` -> crear chat (espera primer JSON con {message,..}), crea el chat y luego delega
     """
     await websocket.accept()
-    logging.info("websocket_create_chat: connection accepted from %s", websocket.client)
     # autenticar por Authorization header del handshake
     auth_header = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
     if not auth_header or not auth_header.lower().startswith("bearer "):
-        logging.warning("websocket_create_chat: missing or invalid Authorization header")
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        logging.warning("websocket: missing or invalid Authorization header")
+        try:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        except Exception:
+            pass
         return
     token = auth_header.split(" ", 1)[1].strip()
     decoded = auth.authenticate_token(token)
     uid = decoded.get("uid") or decoded.get("user_id")
     if not uid:
-        logging.warning("websocket_create_chat: token decoding failed or uid missing")
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        logging.warning("websocket: token decoding failed or uid missing")
+        try:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        except Exception:
+            pass
         return
 
-    # leer primer mensaje del cliente con los datos para crear el chat
+    # Determinar si el cliente quiere unirse a un chat existente
+    chat_id_qs = websocket.query_params.get("chat_id")
+    if chat_id_qs:
+        # Unirse a chat existente
+        logging.info("websocket: connection request to existing chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+        try:
+            chat_oid = PyObjectId.parse(chat_id_qs)
+        except Exception:
+            try:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            except Exception:
+                pass
+            return
+
+        chats_col = database.get_chat_collection()
+        chat = await chats_col.find_one({"_id": chat_oid, "user_id": uid})
+        if chat is None:
+            try:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            except Exception:
+                pass
+            return
+
+        await manager.connect(chat_id_qs, websocket)
+        try:
+            # Preparar y enviar payload de init (historia centrada)
+            try:
+                msgs_col = database.get_message_collection()
+                last = await msgs_col.find_one({"chat_id": chat_oid, "role": {"$ne": "user"}}, sort=[("created_at", -1)])
+                if not last:
+                    last = await msgs_col.find_one({"chat_id": chat_oid}, sort=[("created_at", 1)])
+                init_payload = {"init": {"chat": [], "branch_anchor": None, "last_message_id": None}}
+                if last:
+                    chat_history = await messages_service.build_history_from_message_bottom(last.get("_id"), limit=500)
+                    init_payload = {
+                        "init": {
+                            "chat": chat_history,
+                            "branch_anchor": str(last.get("branch_anchor") or last.get("_id")),
+                            "last_message_id": str(last.get("_id")),
+                            "note": "history of the last used thread"
+                        }
+                    }
+                else:
+                    init_payload = {"init": {"chat": [], "branch_anchor": None, "last_message_id": None}}
+
+                safe_init = _sanitize_for_json(init_payload)
+                await websocket.send_text(_json.dumps(safe_init, ensure_ascii=False))
+            except Exception as e:
+                logging.exception("websocket: failed to build/send init for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+                try:
+                    err_payload = {"init": {"error": "failed to load history", "details": str(e)}}
+                    await websocket.send_text(_json.dumps(_sanitize_for_json(err_payload), ensure_ascii=False))
+                except Exception:
+                    pass
+
+            logging.info("websocket: delegating to websocket_handler for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+            await messages_service.websocket_handler(websocket, chat_oid, uid, manager)
+        except WebSocketDisconnect:
+            try:
+                logging.info("websocket: WebSocketDisconnect for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+                manager.disconnect(chat_id_qs, websocket)
+            except Exception:
+                logging.exception("websocket: error while handling WebSocketDisconnect for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+        except Exception:
+            logging.exception("websocket: unexpected exception for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+            try:
+                manager.disconnect(chat_id_qs, websocket)
+            except Exception:
+                logging.exception("websocket: error while disconnecting after exception for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+        finally:
+            try:
+                logging.info("websocket: final cleanup for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+                manager.disconnect(chat_id_qs, websocket)
+            except Exception:
+                logging.exception("websocket: error during manager.disconnect in finally for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+            try:
+                await websocket.close()
+            except Exception:
+                logging.exception("websocket: error while closing websocket in finally for chat_id=%s uid=%s", str(chat_id_qs), str(uid))
+        return
+
+    # Si no se pasó chat_id -> crear chat nuevo, esperamos primer mensaje JSON con datos
     try:
         payload = await websocket.receive_json()
-        logging.info("websocket_create_chat: received payload: %s", payload)
+        logging.info("websocket: received payload for chat creation: %s", payload)
     except Exception as e:
-        logging.exception("websocket_create_chat: failed to receive initial JSON payload: %s", e)
+        logging.exception("websocket: failed to receive initial JSON payload for chat creation: %s", e)
         try:
             await websocket.send_json({"error": "invalid or missing JSON payload"})
         except Exception:
             pass
-        await websocket.close(code=status.WS_1002_PROTOCOL_ERROR)
+        try:
+            await websocket.close(code=status.WS_1002_PROTOCOL_ERROR)
+        except Exception:
+            pass
         return
 
     message = payload.get("message") or None
@@ -636,21 +725,26 @@ async def websocket_create_chat(websocket: WebSocket):
             await websocket.send_json({"error": "message is required and must be a string"})
         except Exception:
             pass
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        try:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        except Exception:
+            pass
         return
 
     title = payload.get("title") or "New Chat"
     metadata = payload.get("metadata") or {}
     raw_agent_id = payload.get("agent_id")
     agent_obj = None
-    mensaje = payload.get("message") or None
     if raw_agent_id is not None:
         if not isinstance(raw_agent_id, str):
             try:
                 await websocket.send_json({"error": "agent_id must be a string if provided"})
             except Exception:
                 pass
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            try:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            except Exception:
+                pass
             return
         try:
             agent_obj = PyObjectId.parse(raw_agent_id)
@@ -659,7 +753,10 @@ async def websocket_create_chat(websocket: WebSocket):
                 await websocket.send_json({"error": "invalid agent_id"})
             except Exception:
                 pass
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            try:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            except Exception:
+                pass
             return
 
     now = datetime.utcnow()
@@ -678,11 +775,10 @@ async def websocket_create_chat(websocket: WebSocket):
     try:
         res = await chats_col.insert_one(chat_doc)
         chat_id = res.inserted_id
-
-        # crear mensaje inicial/starter (similar a POST /)
-        starter_id = PyObjectId.new()
+        chat_doc["_id"] = chat_id
+        # crear mensaje inicial/starter
         starter = {
-            "_id": starter_id,
+            "_id": PyObjectId.new(),
             "chat_id": chat_id,
             "parent_id": None,
             "children_ids": [],
@@ -699,36 +795,32 @@ async def websocket_create_chat(websocket: WebSocket):
             "created_at": now,
         }
 
-        # ensure chat_doc has its _id so sanitized payload includes it
-        chat_doc["_id"] = chat_id
         try:
-            logging.info("websocket_create_chat: sending initial chat object to client chat_id=%s", str(chat_id))
+            logging.info("websocket: sending initial chat object to client chat_id=%s", str(chat_id))
             await websocket.send_json({"chat": _sanitize_chat_record(chat_doc)})
         except Exception:
-            logging.exception("websocket_create_chat: failed to send sanitized chat, falling back to chat_id only")
+            logging.exception("websocket: failed to send sanitized chat, falling back to chat_id only")
             try:
                 await websocket.send_json({"chat_id": str(chat_id)})
             except Exception:
                 pass
 
     except Exception:
-        logging.exception("websocket_create_chat: failed to create chat or send initial payload for uid=%s", str(uid))
+        logging.exception("websocket: failed to create chat or send initial payload for uid=%s", str(uid))
         try:
             await websocket.close()
         except Exception:
             pass
         return
 
-    # register connection early so broadcasts from message processing reach this socket
+    # Register and initialize
     try:
-        logging.info("websocket_create_chat: registering websocket with manager for chat_id=%s", str(chat_id))
         await manager.connect(chat_id, websocket)
     except Exception:
-        logging.exception("websocket_create_chat: manager.connect failed for chat_id=%s", str(chat_id))
+        logging.exception("websocket: manager.connect failed for chat_id=%s", str(chat_id))
 
-    # inicializar chat vía servicio de mensajes (broadcast/agents)
     try:
-        logging.info("websocket_create_chat: initializing starter message for chat_id=%s", str(chat_id))
+        logging.info("websocket: initializing starter message for chat_id=%s", str(chat_id))
         await messages_service.process_user_message(chat_id, starter, manager=manager)
     except Exception:
         try:
@@ -754,144 +846,31 @@ async def websocket_create_chat(websocket: WebSocket):
             }
             await messages_service.send_message(not_sent, chat_id, manager=manager)
         except Exception:
-            logging.exception("websocket_create_chat: failed while sending fallback system message for chat_id=%s", str(chat_id))
+            logging.exception("websocket: failed while sending fallback system message for chat_id=%s", str(chat_id))
 
-    # preparar y enviar respuesta con el chat creado y mantener la conexión
+    # Delegar a websocket_handler para manejar la sesión
     try:
-        logging.info("websocket_create_chat: registering websocket with manager for chat_id=%s", str(chat_id))
-        await manager.connect(chat_id, websocket)
-        logging.info("websocket_create_chat: entering websocket_handler for chat_id=%s, uid=%s", str(chat_id), str(uid))
+        logging.info("websocket: entering websocket_handler for chat_id=%s, uid=%s", str(chat_id), str(uid))
         await messages_service.websocket_handler(websocket, chat_id, uid, manager)
     except WebSocketDisconnect:
         try:
-            logging.info("websocket_create_chat: websocket disconnected for chat_id=%s", str(chat_id))
+            logging.info("websocket: websocket disconnected for chat_id=%s", str(chat_id))
             manager.disconnect(chat_id, websocket)
         except Exception:
-            logging.exception("websocket_create_chat: error during disconnect handling for chat_id=%s", str(chat_id))
+            logging.exception("websocket: error during disconnect handling for chat_id=%s", str(chat_id))
     except Exception:
-        logging.exception("websocket_create_chat: unexpected exception for chat_id=%s", str(chat_id))
-        # ensure disconnect on any other error
+        logging.exception("websocket: unexpected exception for chat_id=%s", str(chat_id))
         try:
             manager.disconnect(chat_id, websocket)
         except Exception:
-            logging.exception("websocket_create_chat: error while disconnecting after exception for chat_id=%s", str(chat_id))
+            logging.exception("websocket: error while disconnecting after exception for chat_id=%s", str(chat_id))
     finally:
         try:
-            logging.info("websocket_create_chat: final cleanup closing websocket for chat_id=%s", str(chat_id))
+            logging.info("websocket: final cleanup closing websocket for chat_id=%s", str(chat_id))
             try:
                 manager.disconnect(chat_id, websocket)
             except Exception:
-                logging.exception("websocket_create_chat: error during manager.disconnect in finally for chat_id=%s", str(chat_id))
+                logging.exception("websocket: error during manager.disconnect in finally for chat_id=%s", str(chat_id))
             await websocket.close()
         except Exception:
-            logging.exception("websocket_create_chat: error while closing websocket for chat_id=%s in finally", str(chat_id))
-
-
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, chat_id: str | None = Query(None, alias="chat_id")):
-    """WebSocket que requiere ?token=<jwt> en la query string para autenticar.
-
-    El usuario autenticado debe pertenecer al chat. Los mensajes enviados por WS deben
-    tener formato JSON: {"text": "..."} y se persistirán y se retransmitirán a
-    los demás participantes conectados.
-    """
-    # extraer token
-    # extraer Authorization header del handshake
-    auth_header = websocket.headers.get("authorization") or websocket.headers.get("Authorization")
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-    token = auth_header.split(" ", 1)[1].strip()
-    decoded = auth.authenticate_token(token)
-    uid = decoded.get("uid") or decoded.get("user_id")
-    if not uid:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-
-    logging.info("websocket_endpoint: connection request for chat_id=%s uid=%s", str(chat_id), str(uid))
-
-    if not chat_id:
-        logging.warning("websocket_endpoint: missing chat_id query parameter for uid=%s", str(uid))
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-
-    chat_oid = PyObjectId.parse(chat_id)
-    chats_col = database.get_chat_collection()
-    chat = await chats_col.find_one({"_id": chat_oid, "user_id": uid})
-    if chat is None:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-
-    await manager.connect(chat_id, websocket)
-    try:
-        # On connect: send initial context — the thread tree for the last message and
-        # a linear list of the last 30 messages (chronological)
-        try:
-            msgs_col = database.get_message_collection()
-            # prefer the most recent non-user message (agent/system). If none, fall back to the earliest message
-            last = await msgs_col.find_one({"chat_id": chat_oid, "role": {"$ne": "user"}}, sort=[("created_at", -1)])
-            if not last:
-                # fallback to origin/earliest message in the chat
-                last = await msgs_col.find_one({"chat_id": chat_oid}, sort=[("created_at", 1)])
-            init_payload = {"init": {"chat": [], "branch_anchor": None, "last_message_id": None}}
-            if last:
-                # Center history near the most recent message (last._id) instead of the thread origin.
-                # Use a larger node limit to provide a longer context for clients/agents.
-                # build history centered on last message (limit nodes to 500)
-                chat = await messages_service.build_history_from_message_bottom(last.get("_id"), limit=500)
-                init_payload = {
-                    "init": {
-                        "chat": chat,
-                        "branch_anchor": str(last.get("branch_anchor") or last.get("_id")),
-                        "last_message_id": str(last.get("_id")),
-                        "note": "history of the last used thread"
-                    }
-                }
-            else:
-                # no messages yet
-                init_payload = {"init": {"chat": [], "branch_anchor": None, "last_message_id": None}}
-
-            logging.info("websocket_endpoint: sending init payload for chat_id=%s to uid=%s", str(chat_id), str(uid))
-            # sanitize payload to ensure no ObjectId/datetime remain
-            try:
-                safe_init = _sanitize_for_json(init_payload)
-                await websocket.send_text(_json.dumps(safe_init, ensure_ascii=False))
-            except Exception:
-                # fallback to plain send_json (will raise) — handled by outer except
-                await websocket.send_json(init_payload)
-        except Exception as e:
-            # Log full exception to help debugging and return error payload to client
-            logging.exception("websocket_endpoint: failed to build/send init for chat_id=%s uid=%s", str(chat_id), str(uid))
-            try:
-                err_payload = {"init": {"error": "failed to load history", "details": str(e)}}
-                await websocket.send_text(_json.dumps(_sanitize_for_json(err_payload), ensure_ascii=False))
-            except Exception:
-                pass
-
-        # delegate receive loop and processing to messages.websocket_handler
-        logging.info("websocket_endpoint: delegating to websocket_handler for chat_id=%s uid=%s", str(chat_id), str(uid))
-        await messages_service.websocket_handler(websocket, chat_oid, uid, manager)
-    except WebSocketDisconnect:
-        try:
-            logging.info("websocket_endpoint: WebSocketDisconnect for chat_id=%s uid=%s", str(chat_id), str(uid))
-            manager.disconnect(chat_id, websocket)
-        except Exception:
-            logging.exception("websocket_endpoint: error while handling WebSocketDisconnect for chat_id=%s uid=%s", str(chat_id), str(uid))
-    except Exception:
-        # ensure disconnect on any other error and log it
-        logging.exception("websocket_endpoint: unexpected exception for chat_id=%s uid=%s", str(chat_id), str(uid))
-        try:
-            manager.disconnect(chat_id, websocket)
-        except Exception:
-            logging.exception("websocket_endpoint: error while disconnecting after exception for chat_id=%s uid=%s", str(chat_id), str(uid))
-    finally:
-        # Always attempt to clean up the manager state and close the websocket; log any errors
-        try:
-            logging.info("websocket_endpoint: final cleanup for chat_id=%s uid=%s", str(chat_id), str(uid))
-            manager.disconnect(chat_id, websocket)
-        except Exception:
-            logging.exception("websocket_endpoint: error during manager.disconnect in finally for chat_id=%s uid=%s", str(chat_id), str(uid))
-        try:
-            await websocket.close()
-        except Exception:
-            logging.exception("websocket_endpoint: error while closing websocket in finally for chat_id=%s uid=%s", str(chat_id), str(uid))
+            logging.exception("websocket: error while closing websocket for chat_id=%s in finally", str(chat_id))

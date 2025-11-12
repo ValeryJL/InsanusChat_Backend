@@ -55,7 +55,7 @@ async def list_api_keys(authorization: str | None = Header(None)):
         if kop.get("last_used") is not None:
             kop["last_used"] = kop["last_used"].isoformat()
         out.append(kop)
-    return ResponseModel(message="API keys listadas", data=out)
+    return APIKeyListResponse(message="API keys listadas", data=out)
 
 @router.post("/", response_model=APIKeyResponse)
 async def create_api_key(
@@ -124,7 +124,7 @@ async def create_api_key(
     out = dict(api_key_doc)
     out["_id"] = str(out["_id"])
     out["created_at"] = out["created_at"].isoformat()
-    return ResponseModel(message="API key creada", data=out)
+    return APIKeyResponse(message="API key creada", data=out)
 
 @router.put("/", response_model=APIKeyResponse)
 async def update_api_key(
@@ -204,7 +204,7 @@ async def update_api_key(
         kop["created_at"] = kop["created_at"].isoformat()
     if kop.get("last_used"):
         kop["last_used"] = kop["last_used"].isoformat()
-    return ResponseModel(message="API key actualizada", data=kop)
+    return APIKeyResponse(message="API key actualizada", data=kop)
 
 @router.delete("/", response_model=APIKeyResponse)
 async def delete_api_key(api_key_id: str | None = Query(None, alias="api_key_id"), authorization: str | None = Header(None)):
@@ -283,4 +283,4 @@ async def delete_api_key(api_key_id: str | None = Query(None, alias="api_key_id"
         # rollback no posible: informar error
         raise HTTPException(status_code=500, detail="La API key sigue presente tras el intento de borrado")
 
-    return ResponseModel(message="API key eliminada", data={"deleted": kop})
+    return APIKeyResponse(message="API key eliminada", data={"deleted": kop})

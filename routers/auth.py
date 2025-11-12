@@ -36,6 +36,9 @@ def authenticate_token(token: str):
     logger = logging.getLogger(__name__)
     logger.debug("authenticate_token called (preview 64): %s", (token[:64] if isinstance(token, str) else token))
     try:
+        # Si el token viene con prefijo "Bearer <token>", quitar el prefijo
+        if isinstance(token, str) and token.startswith("Bearer "):
+            token = token.split(" ", 1)[1]
         payload = decode_access_token(token)
         sub = payload.get("sub")
         if not sub:
@@ -115,17 +118,18 @@ async def verify_token(authorization: Optional[str] = Header(None)):
     logger = logging.getLogger(__name__)
     logger.info("POST /api/v1/auth/ verify_token called")
     logger.debug("Authorization header: %s", authorization)
-    if not authorization or not authorization.startswith("Bearer "):
-        logger.warning("verify_token - token missing/invalid format")
+    if not authorization:
+        logger.warning("verify_token - token missing")
         raise HTTPException(status_code=401, detail="Token no provisto")
-    token = authorization.split(" ", 1)[1]
+    # Aceptar tanto 'Bearer <token>' como solo '<token>' enviado por Swagger UI
+    token = authorization.split(" ", 1)[1] if authorization.startswith("Bearer ") else authorization
     try:
         decoded = authenticate_token(token)
         # asegurar compatibilidad: exponer tanto "uid" como "user_id"
         data = dict(decoded)
         if "uid" not in data and "user_id" in data:
             data["uid"] = data["user_id"]
-        return ResponseModel(message="Token verificado", data=data)
+        return AuthTokenResponse(message="Token verificado", data=data)
     except HTTPException:
         raise
     except Exception as e:
@@ -143,10 +147,10 @@ async def get_user_profile(authorization: str | None = Header(None)):
     logger.debug("Authorization header raw: %s", authorization)
     try:
         coll = database.get_user_collection()
-        if not authorization or not authorization.startswith("Bearer "):
+        if not authorization:
             logger.warning("Token no provisto o formato incorrecto")
             raise HTTPException(status_code=401, detail="Token no provisto")
-        token = authorization.split(" ", 1)[1]
+        token = authorization.split(" ", 1)[1] if authorization.startswith("Bearer ") else authorization
         logger.info("Token extraido (preview 64): %s", token[:64])
         decoded = authenticate_token(token)
         logger.debug("Token decodificado: %s", decoded)
@@ -183,7 +187,7 @@ async def get_user_profile(authorization: str | None = Header(None)):
         logger.info("User profile serialized, returning response")
         logger.debug("Response data preview: %s", serialized)
 
-        return ResponseModel(message="Perfil recuperado", data=serialized)
+        return UserResponse(message="Perfil recuperado", data=serialized)
     except HTTPException:
         logger.info("Raising HTTPException from get_user_profile")
         raise
@@ -211,10 +215,10 @@ async def update_user_profile(
     logger.info("PUT /api/v1/auth/ update_user_profile called")
     logger.debug("Authorization header: %s", authorization)
     logger.debug("Payload preview: %s", payload)
-    if not authorization or not authorization.startswith("Bearer "):
+    if not authorization:
         logger.warning("update_user_profile - token missing/invalid format")
         raise HTTPException(status_code=401, detail="Token no provisto")
-    token = authorization.split(" ", 1)[1]
+    token = authorization.split(" ", 1)[1] if authorization.startswith("Bearer ") else authorization
     decoded = authenticate_token(token)
     # decoded es un dict normalizado: {auth_type, user_id, payload}
 
@@ -275,7 +279,7 @@ async def update_user_profile(
 
     # Validar/limitar la respuesta con AuthUserModel
     auth_user = AuthUserModel.model_validate(_serialize_doc(updated))
-    return ResponseModel(message="Usuario actualizado", data=_serialize_doc(auth_user.model_dump()))
+    return UserResponse(message="Usuario actualizado", data=_serialize_doc(auth_user.model_dump()))
 
 
 @router.post("/login", response_model=AuthTokenResponse)
@@ -316,7 +320,7 @@ async def local_login(
         subject = str(user_doc.get("_id"))
         token = create_access_token(subject)
 
-        return ResponseModel(message="Login OK", data={"access_token": token, "token_type": "bearer", "user_id": subject})
+        return AuthTokenResponse(message="Login OK", data={"access_token": token, "token_type": "bearer", "user_id": subject})
     except HTTPException:
         raise
     except Exception as e:

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Header, Body, Query
 from routers import auth
 import database
-from models import PyObjectId, ResponseModel, AgentListResponse, AgentResponse
+from models import PyObjectId, AgentListResponse, AgentResponse
 from datetime import datetime
 from typing import List
  
@@ -60,7 +60,7 @@ async def list_agents(authorization: str | None = Header(None)):
     agents = user.get("agents", []) if user else []
     # serializar ObjectId/datetime recursivamente
     out = [_sanitize_value(a) for a in agents]
-    return ResponseModel(message="Agentes listados", data=out)
+    return AgentListResponse(message="Agentes listados", data=out)
 
 
 @router.post("/", response_model=AgentResponse)
@@ -131,7 +131,7 @@ async def create_agent(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
     agent_doc_out = _sanitize_value(agent_doc)
-    return ResponseModel(message="Agente creado", data=agent_doc_out)
+    return AgentResponse(message="Agente creado", data=agent_doc_out)
 
 
 @router.put("/", response_model=AgentResponse)
@@ -214,7 +214,7 @@ async def update_agent(
         raise HTTPException(status_code=404, detail="Agente no encontrado tras actualización")
     # serializar ids y fechas recursivamente
     agent_out = _sanitize_value(agent)
-    return ResponseModel(message="Agente actualizado", data=agent_out)
+    return AgentResponse(message="Agente actualizado", data=agent_out)
 
 
 @router.delete("/", response_model=AgentResponse)
@@ -242,4 +242,4 @@ async def delete_agent(agent_id: str | None = Query(None, alias="agent_id"), aut
     res = await coll.update_one({"_id": user_oid}, {"$pull": {"agents": {"_id": oid}}})
     if res.modified_count == 0:
         raise HTTPException(status_code=404, detail="Agente no encontrado")
-    return ResponseModel(message="Agente eliminado", data={"id": auth._serialize_doc(agent)})
+    return AgentResponse(message="Agente eliminado", data={"id": auth._serialize_doc(agent)})
