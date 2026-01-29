@@ -137,7 +137,7 @@ class ChatCLI:
         
         try:
             response = await self.client.post(
-                f"{self.base_url}/auth/register",
+                f"{self.base_url}/api/v1/auth/register",
                 json=payload,
                 headers={"Content-Type": "application/json"}
             )
@@ -163,9 +163,9 @@ class ChatCLI:
         
         try:
             response = await self.client.post(
-                f"{self.base_url}/auth/login",
-                data={"username": email, "password": password},
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
+                f"{self.base_url}/api/v1/auth/login",
+                json={"email": email, "password": password},
+                headers={"Content-Type": "application/json"}
             )
             
             if response.status_code == 200:
@@ -199,7 +199,7 @@ class ChatCLI:
         
         try:
             response = await self.client.get(
-                f"{self.base_url}/auth/profile",
+                f"{self.base_url}/api/v1/auth/",
                 headers=self.get_headers()
             )
             
@@ -225,7 +225,7 @@ class ChatCLI:
         
         try:
             response = await self.client.get(
-                f"{self.base_url}/chats",
+                f"{self.base_url}/api/v1/chats/",
                 headers=self.get_headers()
             )
             
@@ -268,7 +268,7 @@ class ChatCLI:
         
         try:
             response = await self.client.post(
-                f"{self.base_url}/chats",
+                f"{self.base_url}/api/v1/chats/",
                 json=payload,
                 headers=self.get_headers()
             )
@@ -295,21 +295,10 @@ class ChatCLI:
             self.print_error("Please login first")
             return
         
-        try:
-            response = await self.client.get(
-                f"{self.base_url}/chats/{chat_id}",
-                headers=self.get_headers()
-            )
-            
-            if response.status_code == 200:
-                data = response.json().get("data", {})
-                self.current_chat_id = chat_id
-                self.current_chat_title = data.get("title", "Untitled Chat")
-                self.print_success(f"Selected chat: {self.current_chat_title}")
-            else:
-                self.print_error(f"Failed to select chat: {response.text}")
-        except Exception as e:
-            self.print_error(f"Error selecting chat: {e}")
+        # Just set it as current chat - no need to fetch from API
+        self.current_chat_id = chat_id
+        self.current_chat_title = f"Chat {chat_id[:8]}..."
+        self.print_success(f"Selected chat: {chat_id}")
     
     async def delete_chat(self, chat_id: str):
         """Delete a chat"""
@@ -324,7 +313,7 @@ class ChatCLI:
         
         try:
             response = await self.client.delete(
-                f"{self.base_url}/chats/{chat_id}",
+                f"{self.base_url}/api/v1/chats/{chat_id}",
                 headers=self.get_headers()
             )
             
@@ -350,7 +339,7 @@ class ChatCLI:
         
         try:
             response = await self.client.post(
-                f"{self.base_url}/chats/{self.current_chat_id}/messages",
+                f"{self.base_url}/api/v1/chats/{self.current_chat_id}/messages",
                 json={"content": content},
                 headers=self.get_headers()
             )
@@ -377,7 +366,7 @@ class ChatCLI:
         
         try:
             response = await self.client.get(
-                f"{self.base_url}/chats/{self.current_chat_id}/messages",
+                f"{self.base_url}/api/v1/chats/{self.current_chat_id}/messages",
                 headers=self.get_headers()
             )
             
@@ -407,7 +396,7 @@ class ChatCLI:
         
         try:
             response = await self.client.get(
-                f"{self.base_url}/agents",
+                f"{self.base_url}/api/v1/agents/",
                 headers=self.get_headers()
             )
             
@@ -458,7 +447,7 @@ class ChatCLI:
         
         try:
             response = await self.client.post(
-                f"{self.base_url}/agents",
+                f"{self.base_url}/api/v1/agents/",
                 json=payload,
                 headers=self.get_headers()
             )
@@ -485,7 +474,7 @@ class ChatCLI:
         
         try:
             response = await self.client.delete(
-                f"{self.base_url}/agents/{agent_id}",
+                f"{self.base_url}/api/v1/agents/?agent_id={agent_id}",
                 headers=self.get_headers()
             )
             
