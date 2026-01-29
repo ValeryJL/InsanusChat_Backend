@@ -1,44 +1,74 @@
-# InsanusChat_Backend
-Backend FastAPI de mi proyecto de chat para crear agentes ia, con acceso a herramientas, mcp servers, y un chat bifurcado visual
+# InsanusChat Backend
 
-## Recientes Mejoras (2026-01)
+> A powerful FastAPI-based backend for AI chat applications with advanced agent management, MCP server integration, and visual branching conversations.
 
-Este backend ha sido refactorizado para aprovechar mejor **LangChain** en la ejecución de agentes, con mejoras significativas en:
-- Integración de MCP (Model Context Protocol) servers como herramientas LangChain
-- Ejecución de snippets de código (Python/JavaScript) como herramientas
-- Mejor manejo de errores y logging
-- Tests automatizados
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green.svg)](https://fastapi.tiangolo.com/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-7.0+-green.svg)](https://www.mongodb.com/)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
 
-Ver [REFACTORING.md](REFACTORING.md) para detalles completos de la refactorización.
+## Overview
 
-## Instalación
+InsanusChat Backend is a comprehensive chat system that enables:
+- **AI Agent Management**: Create and manage custom AI agents with configurable behaviors
+- **MCP Integration**: Connect to Model Context Protocol servers for extended functionality
+- **Code Execution**: Run Python/JavaScript snippets as tools within conversations
+- **Branching Conversations**: Visual tree-based chat navigation with message history
+- **Real-time Communication**: WebSocket support for live chat interactions
+- **Secure Authentication**: JWT-based authentication with API key management
 
-Requisitos previos
-- Python 3.12.1 instalado
-- pip, git
+## Quick Start
 
-Pasos rápidos (entorno virtual)
-1. Clonar el repo:
-    ```
-    git clone https://github.com/ValeryJL/InsanusChat_Backend.git
-    cd InsanusChat_Backend
-    ```
-2. Crear y activar entorno virtual:
-    ```
-    python -m venv .venv
-    source .venv/bin/activate
-    ```
-3. Instalar dependencias:
-    ```
-    pip install -r requirements.txt
-    ```
-4. Configurar variables de entorno (ver sección siguiente).
-5. Ejecutar la aplicación en modo desarrollo (ajustar el import si tu app principal no es `backend:app`, `backend.py`, `Class app`):
-    ```
-    uvicorn backend:app --reload --host 0.0.0.0 --port PORT
-    ```
+### Prerequisites
+- Python 3.12.1 or higher
+- MongoDB 7.0+
+- pip and git
 
-## Variables de entorno recomendadas
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/ValeryJL/InsanusChat_Backend.git
+cd InsanusChat_Backend
+
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment variables (see Configuration section)
+cp .env.example .env  # Edit with your values
+
+# Run the server
+python backend.py
+```
+
+The server will start at `http://localhost:8000`
+
+### Quick Test
+
+```bash
+# Use the interactive CLI
+python cli/chat_cli.py
+
+# Or run comprehensive tests
+python tests/test_api_comprehensive.py
+```
+
+## Recent Improvements (2025-01)
+
+This backend has been refactored to leverage **LangChain** for agent execution, with significant improvements in:
+- ✅ MCP (Model Context Protocol) server integration as LangChain tools
+- ✅ Python/JavaScript code snippet execution as tools
+- ✅ Enhanced error handling and logging
+- ✅ Comprehensive automated testing
+- ✅ Reorganized project structure with modular models
+
+See [docs/REFACTORING.md](docs/REFACTORING.md) for complete refactoring details.
+
+## Configuration
 
 Crea un archivo `.env` en la raíz con las variables necesarias. Ejemplo mínimo:
 
@@ -60,7 +90,13 @@ Sugerencias
 - Usa gestores de secretos (Vault, AWS Secrets Manager, GitHub Secrets) en producción en lugar de `.env`.
 - Genera LOCAL_AUTH_SECRET con un generador seguro y cambia valores por defecto antes de desplegar.
 
-## Configuración Local para Desarrollo
+### Alternative: Run with Uvicorn
+
+```bash
+uvicorn backend:app --reload --host 0.0.0.0 --port 8000
+```
+
+## Development Setup
 
 ### MongoDB Local
 
@@ -97,42 +133,208 @@ cd secrets
 
 Esto crea los certificados necesarios en `secrets/mongodb-cert.pem`.
 
+## API Endpoints
+
+### Authentication
+- `POST /auth/register` - Register a new user
+- `POST /auth/login` - Login and obtain JWT token
+- `GET /auth/profile` - Get current user profile
+
+### Chats
+- `GET /chats` - List all user chats
+- `POST /chats` - Create a new chat
+- `GET /chats/{chat_id}` - Get specific chat details
+- `DELETE /chats/{chat_id}` - Delete a chat
+- `GET /chats/{chat_id}/messages` - Get chat messages
+- `POST /chats/{chat_id}/messages` - Send a message to chat
+
+### Agents
+- `GET /agents` - List all user agents
+- `POST /agents` - Create a new agent
+- `GET /agents/{agent_id}` - Get agent details
+- `PUT /agents/{agent_id}` - Update agent configuration
+- `DELETE /agents/{agent_id}` - Delete an agent
+
+### API Keys
+- `GET /api-keys` - List all API keys
+- `POST /api-keys` - Add a new API key for AI providers
+- `PUT /api-keys/{key_id}` - Update an API key
+- `DELETE /api-keys/{key_id}` - Delete an API key
+
+### MCP Servers
+- `GET /mcps` - List all MCP server entries
+- `POST /mcps` - Register a new MCP server
+- `GET /mcps/{mcp_id}` - Get MCP server details
+- `PUT /mcps/{mcp_id}` - Update MCP configuration
+- `DELETE /mcps/{mcp_id}` - Delete an MCP server
+
+### Code Snippets
+- `GET /snippets` - List all code snippets
+- `POST /snippets` - Create a new snippet
+- `GET /snippets/{snippet_id}` - Get snippet details
+- `PUT /snippets/{snippet_id}` - Update a snippet
+- `DELETE /snippets/{snippet_id}` - Delete a snippet
+
+### WebSocket
+- `WS /ws/chat/{chat_id}` - WebSocket connection for real-time chat
+
+For detailed API documentation, visit `/docs` (Swagger UI) or `/redoc` (ReDoc) when the server is running.
+
 ## Testing
 
-Ejecutar tests:
+### Interactive CLI
 ```bash
-python3 -m pytest tests/ -v
+# Start the interactive chat CLI
+python cli/chat_cli.py
+
+# Connect to a specific server
+python cli/chat_cli.py --url https://api.example.com
 ```
 
-Tests específicos:
+### Comprehensive Test Script
 ```bash
-# Tests de snippets
-python3 -m pytest tests/test_snippets.py -v
+# Run the full test suite interactively
+python tests/test_api_comprehensive.py
 
-# Tests de LangChain tools
-python3 -m pytest tests/test_langchain_tools.py -v
-
-# Tests de MCP client
-python3 -m pytest tests/test_mcp_client.py -v
+# Test against a specific URL
+python tests/test_api_comprehensive.py --url https://api.example.com
 ```
 
-## Ejemplos
-
-### Servidor MCP de Ejemplo
-
-Ver `examples/mcp_servers/calculator_server.py` para un ejemplo completo de servidor MCP.
-
-Ejecutar:
+### Unit Tests
 ```bash
-python3 examples/mcp_servers/calculator_server.py
+# Run all tests
+pytest tests/ -v
+
+# Run specific tests
+pytest tests/test_snippets.py -v
+pytest tests/test_langchain_tools.py -v
+pytest tests/test_mcp_client.py -v
+
+# Run with coverage
+pytest --cov=. --cov-report=html tests/
 ```
 
-## Arquitectura
+For detailed testing documentation, see [tests/testing.md](tests/testing.md)
 
-- **Backend FastAPI**: API REST y WebSocket para chat
-- **MongoDB**: Base de datos para usuarios, chats, mensajes, agentes
-- **LangChain**: Framework para agentes y herramientas
-- **MCP Servers**: Servidores de herramientas externos
-- **Code Snippets**: Ejecución de código Python/JavaScript
+## Project Structure
 
-Para más detalles, ver [REFACTORING.md](REFACTORING.md).
+```
+InsanusChat_Backend/
+├── models/                  # Pydantic models
+│   ├── schemas.py          # Domain models (User, Agent, Chat, etc.)
+│   ├── responses.py        # API response models
+│   └── __init__.py         # Model exports
+├── routers/                # FastAPI route handlers
+│   ├── auth.py            # Authentication endpoints
+│   ├── chats.py           # Chat management
+│   ├── agents.py          # Agent management
+│   └── ...
+├── services/              # Business logic layer
+│   ├── agent_service.py   # Agent execution with LangChain
+│   ├── mcp_client.py      # MCP server integration
+│   └── snippet_runner.py  # Code snippet execution
+├── cli/                   # Command-line tools
+│   └── chat_cli.py        # Interactive chat CLI
+├── tests/                 # Test suite
+│   ├── test_api_comprehensive.py
+│   ├── test_snippets.py
+│   └── testing.md         # Testing documentation
+├── docs/                  # Documentation
+│   ├── REFACTORING.md
+│   ├── PROJECT_SUMMARY.md
+│   └── ...
+├── examples/              # Example implementations
+│   └── mcp_servers/       # Example MCP servers
+├── backend.py             # Main application entry point
+├── database.py            # MongoDB connection
+├── models.py              # Legacy models (for backward compatibility)
+└── requirements.txt       # Python dependencies
+```
+
+## Architecture
+
+### Core Components
+
+- **FastAPI Backend**: RESTful API and WebSocket server for real-time communication
+- **MongoDB**: Document database for users, chats, messages, and agents
+- **LangChain**: Framework for AI agent orchestration and tool integration
+- **MCP Servers**: External tool servers following Model Context Protocol
+- **Code Execution**: Sandboxed Python/JavaScript snippet runner
+
+### Key Features
+
+1. **Branching Conversations**: Tree-based message structure allowing multiple conversation paths
+2. **Agent System**: Customizable AI agents with configurable prompts and tool access
+3. **Tool Integration**: Extensible tool system via MCP servers and code snippets
+4. **Security**: JWT authentication, encrypted API keys, secure credential management
+5. **Real-time**: WebSocket support for live chat updates
+
+For architectural details, see [docs/REFACTORING.md](docs/REFACTORING.md)
+
+## Examples
+
+### MCP Server Example
+
+See `examples/mcp_servers/calculator_server.py` for a complete MCP server implementation.
+
+Run the example:
+```bash
+python examples/mcp_servers/calculator_server.py
+```
+
+### Creating an Agent
+
+```python
+import httpx
+
+# Login and get token
+response = httpx.post("http://localhost:8000/auth/login", 
+    data={"username": "user@example.com", "password": "password"})
+token = response.json()["data"]["access_token"]
+
+# Create an agent
+response = httpx.post("http://localhost:8000/agents",
+    json={
+        "name": "Math Helper",
+        "description": "Agent for mathematical calculations",
+        "system_prompt": ["You are a helpful math assistant."]
+    },
+    headers={"Authorization": f"Bearer {token}"})
+
+agent = response.json()["data"]
+print(f"Created agent: {agent['name']}")
+```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+
+## Documentation
+
+- **API Documentation**: See `docs/docs API y WEBSOCKET.md`
+- **Testing Guide**: See `tests/testing.md`
+- **Project Summary**: See `docs/PROJECT_SUMMARY.md`
+- **Quick Start Guide**: See `docs/QUICKSTART_TESTING.md`
+- **Security Advisory**: See `docs/SECURITY_ADVISORY.md`
+- **Refactoring Details**: See `docs/REFACTORING.md`
+
+## Support
+
+For issues, questions, or contributions, please open an issue on GitHub.
+
+## Acknowledgments
+
+- Built with [FastAPI](https://fastapi.tiangolo.com/)
+- Powered by [LangChain](https://python.langchain.com/)
+- Database by [MongoDB](https://www.mongodb.com/)
+- Inspired by the [Model Context Protocol](https://modelcontextprotocol.io/)
