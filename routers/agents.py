@@ -118,7 +118,7 @@ async def create_agent(
         "snippets": snippets,
         "active_tools": payload.get("active_tools", []),
         "active_mcps": payload.get("active_mcps", []),
-        "model_selected": payload.get("model_selected") or "gemini-2.0-flash-exp",
+        "model_selected": payload.get("model_selected") or "gemini-1.5-flash",
         "model_fallback": payload.get("model_fallback"),
         "api_key_id": payload.get("api_key_id"),  # Optional API key association
         "metadata": payload.get("metadata", {}),

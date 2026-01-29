@@ -197,8 +197,11 @@ async def create_chat(
         except Exception:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="agent_id inválido")
 
+    # Convert user_id to PyObjectId to match list_chats query
+    user_oid = PyObjectId.parse(uid)
+    
     chat_doc = {
-        "user_id": uid,
+        "user_id": user_oid,
         "agent_id": agent_obj,
         "title": title,
         "metadata": metadata,

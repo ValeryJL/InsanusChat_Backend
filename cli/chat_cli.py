@@ -533,10 +533,10 @@ class ChatCLI:
         # Model selection
         print(f"\n{Colors.BOLD}Select Model:{Colors.ENDC}")
         available_models = [
-            ("gemini-2.0-flash-exp", "Gemini 2.0 Flash (Experimental) - Fast and efficient"),
-            ("gemini-2.0-flash-thinking-exp", "Gemini 2.0 Flash Thinking - Advanced reasoning"),
-            ("gemini-1.5-pro", "Gemini 1.5 Pro - High capability (deprecated)"),
-            ("gemini-1.5-flash", "Gemini 1.5 Flash - Fast (deprecated)"),
+            ("gemini-1.5-flash", "Gemini 1.5 Flash - Fast and efficient (recommended)"),
+            ("gemini-1.5-pro", "Gemini 1.5 Pro - High capability"),
+            ("gemini-1.5-flash-8b", "Gemini 1.5 Flash 8B - Lightweight and fast"),
+            ("gemini-pro", "Gemini Pro - Legacy model"),
         ]
         
         for i, (model_name, description) in enumerate(available_models, 1):
@@ -544,7 +544,7 @@ class ChatCLI:
         
         model_choice = input(f"{Colors.OKCYAN}Select model number (default: 1): {Colors.ENDC}").strip()
         
-        selected_model = "gemini-2.0-flash-exp"  # Default
+        selected_model = "gemini-1.5-flash"  # Default
         if model_choice and model_choice.isdigit():
             idx = int(model_choice) - 1
             if 0 <= idx < len(available_models):

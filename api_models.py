@@ -135,7 +135,7 @@ class CreateAgentRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="Agent name")
     description: Optional[str] = Field(None, max_length=500, description="Agent description")
     system_prompt: List[str] = Field(default_factory=list, description="System prompt segments")
-    model_selected: Optional[str] = Field("gemini-2.0-flash-exp", description="LLM model to use")
+    model_selected: Optional[str] = Field("gemini-1.5-flash", description="LLM model to use")
     temperature: Optional[float] = Field(0.7, ge=0.0, le=2.0, description="Model temperature")
     mcp_ids: List[str] = Field(default_factory=list, description="List of MCP server IDs to enable")
     snippet_ids: List[str] = Field(default_factory=list, description="List of snippet IDs to enable")
@@ -146,7 +146,7 @@ class CreateAgentRequest(BaseModel):
                 "name": "Customer Support Agent",
                 "description": "Helps customers with product questions",
                 "system_prompt": ["You are a helpful customer support agent.", "Be polite and professional."],
-                "model_selected": "gemini-2.0-flash-exp",
+                "model_selected": "gemini-1.5-flash",
                 "temperature": 0.7,
                 "mcp_ids": [],
                 "snippet_ids": []
@@ -195,7 +195,7 @@ class AgentResponse(BaseModel):
                 "name": "Customer Support Agent",
                 "description": "Helps customers",
                 "system_prompt": ["You are helpful."],
-                "model_selected": "gemini-2.0-flash-exp",
+                "model_selected": "gemini-1.5-flash",
                 "temperature": 0.7,
                 "created_at": "2026-01-29T10:00:00Z",
                 "active": True
