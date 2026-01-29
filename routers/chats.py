@@ -19,6 +19,12 @@ router = APIRouter(prefix="/api/v1/chats", tags=["Chats"])
 def _sanitize_chat_record(c: dict) -> dict:
     c = dict(c)
     c["_id"] = str(c["_id"])
+    # sanitize user_id (required field)
+    if c.get("user_id") is not None:
+        try:
+            c["user_id"] = str(c["user_id"])
+        except Exception:
+            pass
     # optional agent id
     if c.get("agent_id") is not None:
         try:

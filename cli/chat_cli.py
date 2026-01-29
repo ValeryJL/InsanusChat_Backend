@@ -536,7 +536,6 @@ class ChatCLI:
             ("gemini-1.5-flash", "Gemini 1.5 Flash - Fast and efficient (recommended)"),
             ("gemini-1.5-pro", "Gemini 1.5 Pro - High capability"),
             ("gemini-1.5-flash-8b", "Gemini 1.5 Flash 8B - Lightweight and fast"),
-            ("gemini-pro", "Gemini Pro - Legacy model"),
         ]
         
         for i, (model_name, description) in enumerate(available_models, 1):
