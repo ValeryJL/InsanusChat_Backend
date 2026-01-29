@@ -2,6 +2,7 @@
 .env*
 uvicorn.*
 
+.secrets/
 .venv/
 .vscode/
 __pycache__/

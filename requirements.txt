@@ -11,3 +11,5 @@ httpx>=0.25.0                       # Cliente HTTP async usado por services.tool
 pytest==7.4.0                       # Framework de testing
 mcp[client]==1.21.0                 # Cliente MCP para integración con el servicio MCP de Insanus Tech
 anthropic==0.72.0                   # Cliente oficial de Anthropic API para modelos Claude
+langchain>=0.0.300                 # Framework de agentes y chains (adaptador inicial)
+google-generativeai>=0.3.0         # Cliente oficial para la Generative API (Gemini)
