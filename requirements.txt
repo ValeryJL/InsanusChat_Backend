@@ -9,6 +9,7 @@ passlib[bcrypt]==1.7.0              # Biblioteca de hashing de contraseñas; el 
 python-jose[cryptography]==3.3.0    # Implementación JOSE/JWT para crear/verificar tokens JWT; usa cryptography para operaciones criptográficas
 httpx>=0.25.0                       # Cliente HTTP async usado por services.tools.call_mcp (>=0.25.0 para compat con jupyterlab)
 pytest==7.4.0                       # Framework de testing
+pytest-asyncio>=0.21.0              # Soporte pytest para funciones async
 mcp==1.1.0                          # Cliente MCP para integración con el servicio MCP
 anthropic==0.72.0                   # Cliente oficial de Anthropic API para modelos Claude
 langchain>=0.3.0                    # Framework de agentes y chains
