@@ -254,7 +254,7 @@ class ChatCLI:
             self.print_error(f"Error listing chats: {e}")
     
     async def create_chat(self):
-        """Create a new chat"""
+        """Create a new chat with optional agent and initial message"""
         if not self.token:
             self.print_error("Please login first")
             return
@@ -262,9 +262,44 @@ class ChatCLI:
         self.print_header("Create New Chat")
         title = input(f"{Colors.OKCYAN}Chat Title (optional): {Colors.ENDC}").strip()
         
+        # Get available agents
+        agent_id = None
+        try:
+            agents_response = await self.client.get(
+                f"{self.base_url}/api/v1/agents/",
+                headers=self.get_headers()
+            )
+            
+            if agents_response.status_code == 200:
+                agents = agents_response.json().get("data", [])
+                if agents:
+                    print(f"\n{Colors.OKBLUE}Available Agents:{Colors.ENDC}")
+                    for i, agent in enumerate(agents, 1):
+                        agent_name = agent.get("name", "Unnamed")
+                        agent_desc = agent.get("description", "No description")
+                        print(f"  {i}. {Colors.OKCYAN}{agent_name}{Colors.ENDC} - {agent_desc}")
+                    
+                    agent_choice = input(f"\n{Colors.OKCYAN}Select agent number (or press Enter to skip): {Colors.ENDC}").strip()
+                    if agent_choice.isdigit():
+                        idx = int(agent_choice) - 1
+                        if 0 <= idx < len(agents):
+                            agent_id = agents[idx].get("_id")
+                            self.print_info(f"Selected agent: {agents[idx].get('name')}")
+                else:
+                    self.print_warning("No agents found. Create one with 'agent new'")
+        except Exception as e:
+            self.print_warning(f"Could not fetch agents: {e}")
+        
+        # Ask for initial message
+        initial_message = input(f"\n{Colors.OKCYAN}Initial message (optional, press Enter to skip): {Colors.ENDC}").strip()
+        
         payload = {}
         if title:
             payload["title"] = title
+        if agent_id:
+            payload["agent_id"] = agent_id
+        if initial_message:
+            payload["message"] = initial_message
         
         try:
             response = await self.client.post(
@@ -283,7 +318,11 @@ class ChatCLI:
                 # Auto-select the new chat
                 self.current_chat_id = chat_id
                 self.current_chat_title = chat_title
-                self.print_info("Chat auto-selected. You can now send messages!")
+                
+                if initial_message:
+                    self.print_success("Initial message sent! Waiting for agent response...")
+                else:
+                    self.print_info("Chat created. Send first message with 'send <message>'")
             else:
                 self.print_error(f"Failed to create chat: {response.text}")
         except Exception as e:
@@ -338,9 +377,28 @@ class ChatCLI:
             return
         
         try:
+            # First, get the last message to use as parent_id
+            history_response = await self.client.get(
+                f"{self.base_url}/api/v1/chats/{self.current_chat_id}/messages",
+                headers=self.get_headers()
+            )
+            
+            parent_id = None
+            if history_response.status_code == 200:
+                messages = history_response.json().get("data", [])
+                if messages:
+                    # Get the last message ID
+                    parent_id = messages[-1].get("_id")
+            
+            if not parent_id:
+                self.print_error("Cannot send message: No parent message found. Chat might be empty.")
+                self.print_info("Try creating a new chat with an initial message using 'chat new'")
+                return
+            
+            # Send the message with proper payload
             response = await self.client.post(
                 f"{self.base_url}/api/v1/chats/{self.current_chat_id}/messages",
-                json={"content": content},
+                json={"text": content, "parent_id": parent_id},
                 headers=self.get_headers()
             )
             
