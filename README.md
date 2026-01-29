@@ -78,12 +78,18 @@ python cli/chat_cli.py
 
 #### Chat Management
 - `chats` - List all chats
-- `chat new` - Create a new chat (message optional!)
+- `chat new` - Create a new chat with agent selection and optional initial message
 - `chat select <id>` - Select a chat
 - `chat delete <id>` - Delete a chat
 
+**Enhanced Chat Creation** ⭐:
+- Shows available agents when creating a chat
+- Allows interactive agent selection by number
+- Supports optional initial message
+- Auto-selects the newly created chat
+
 #### Messages
-- `send <message>` - Send message to current chat
+- `send <message>` - Send message to current chat (requires parent message)
 - `history` - View chat history
 
 #### Agents
@@ -120,6 +126,35 @@ This backend has been refactored to leverage **LangChain** for agent execution, 
 - ✅ Reorganized project structure with modular models
 
 See [docs/REFACTORING.md](docs/REFACTORING.md) for complete refactoring details.
+
+## Setup & Initialization
+
+### 1. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Create Default Agent (Recommended)
+Create a system-wide mock agent for testing and as a fallback:
+
+```bash
+python scripts/create_default_agent.py
+```
+
+This creates "MockBot", a default agent that provides mock responses. All users can access this agent.
+
+### 3. Generate SSL Certificates (if needed)
+For MongoDB X.509 authentication:
+
+```bash
+cd secrets
+./create-cert.sh
+```
+
+### 4. Setup MongoDB (optional for local development)
+```bash
+./setup_local_mongodb.sh
+```
 
 ## Configuration
 
