@@ -62,39 +62,53 @@ python tests/test_api_comprehensive.py
 
 ## Interactive CLI
 
-The CLI provides a convenient way to interact with the backend:
+The CLI provides a complete management interface for the backend:
 
 ```bash
 python cli/chat_cli.py
 ```
 
-**Available Commands:**
+### All Available Commands
 
-**Authentication:**
+#### Authentication
 - `register` - Register a new user
 - `login` - Login with credentials
 - `logout` - Logout current user
 - `profile` - View your profile
 
-**Chat Management:**
+#### Chat Management
 - `chats` - List all chats
-- `chat new` - Create a new chat
+- `chat new` - Create a new chat (message optional!)
 - `chat select <id>` - Select a chat
 - `chat delete <id>` - Delete a chat
 
-**Messages:**
+#### Messages
 - `send <message>` - Send message to current chat
 - `history` - View chat history
 
-**Agents:**
+#### Agents
 - `agents` - List all agents
 - `agent new` - Create a new agent
 - `agent delete <id>` - Delete an agent
 
-**Utilities:**
+#### API Keys ⭐ NEW
+- `apikeys` - List all API keys
+- `apikey add` - Add a new API key
+- `apikey delete <id>` - Delete an API key
+
+#### Tools/Resources ⭐ NEW
+- `resources` - List all MCPs and snippets
+- `mcp add` - Add a new MCP server
+- `mcp delete <id>` - Delete an MCP server
+- `snippet add` - Add a new code snippet
+- `snippet delete <id>` - Delete a code snippet
+
+#### Utilities
 - `help` - Show all commands
 - `clear` - Clear screen
 - `quit/exit` - Exit CLI
+
+See [CLI_DEMO.txt](CLI_DEMO.txt) for detailed examples and usage.
 
 ## Recent Improvements (2025-01)
 
