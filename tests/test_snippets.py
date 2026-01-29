@@ -13,7 +13,7 @@ async def test_execute_python_snippet():
         "code": "return 'Hello from Python!'"
     }
     result = await execute_snippet(snippet)
-    assert result["success"] == True
+    assert result["success"]
     assert "Hello from Python!" in result.get("stdout", "")
 
 
@@ -25,7 +25,7 @@ async def test_execute_javascript_snippet():
         "code": "return 'Hello from JavaScript!'"
     }
     result = await execute_snippet(snippet)
-    assert result["success"] == True
+    assert result["success"]
 
 
 @pytest.mark.asyncio
@@ -36,7 +36,7 @@ async def test_execute_empty_snippet():
         "code": ""
     }
     result = await execute_snippet(snippet)
-    assert result["success"] == False
+    assert not result["success"]
     assert result["error"] == "empty_code"
 
 
@@ -52,7 +52,7 @@ return "No input"
 """
     }
     result = await execute_snippet(snippet, input_data={"message": "test"})
-    assert result["success"] == True
+    assert result["success"]
     assert "test" in result.get("stdout", "")
 
 
@@ -64,5 +64,5 @@ async def test_snippet_timeout():
         "code": "import time; time.sleep(20); return 'done'"
     }
     result = await execute_snippet(snippet, timeout=2)
-    assert result["success"] == False
+    assert not result["success"]
     assert result["error"] == "timeout"

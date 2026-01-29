@@ -185,7 +185,7 @@ async def create_snippet_tools(user_doc: Dict[str, Any], agent_obj: Dict[str, An
     if not (user_doc and agent_obj):
         return tools
     
-    snippets_map = {str(s.get("_id")): s for s in user_doc.get("code_snippets", []) or []}
+    snippets_map = {str(s.get("_id")): s for s in user_doc.get("code_snippets", []) or user_doc.get("snippets", []) or []}
     
     for snippet_id in agent_obj.get("snippet_ids", []) or []:
         snippet_id_str = str(snippet_id)

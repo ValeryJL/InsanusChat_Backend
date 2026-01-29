@@ -31,6 +31,11 @@ class MCPClient:
         self._stdio_transport = None
         self.mcp_tools: Dict[str, Any] = {}
         self._connected = False
+    
+    @property
+    def is_connected(self) -> bool:
+        """Check if the client is currently connected to an MCP server."""
+        return self._connected
 
     async def connect_to_server(self, server_script_path: str, command: Optional[str] = None, args: Optional[list] = None, env: Optional[Dict[str, str]] = None):
         """Connect to an MCP server script via stdio transport.

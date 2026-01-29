@@ -2,12 +2,7 @@
 Pytest configuration and fixtures.
 """
 import pytest
-import asyncio
 
+# pytest-asyncio 0.21.0+ provides automatic event loop handling
+# No need for manual event_loop fixture
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for each test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()

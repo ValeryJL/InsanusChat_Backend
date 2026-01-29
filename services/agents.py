@@ -150,6 +150,7 @@ async def run_agent(chat_oid, message_id):
             # 4. Execute agent loop with tool calling
             logger.info(f"Starting agent execution loop with {len(messages)} messages")
             max_iterations = 5
+            response = None  # Initialize to avoid NameError
             
             for iteration in range(max_iterations):
                 logger.info(f"Agent iteration {iteration + 1}/{max_iterations}")
@@ -186,7 +187,7 @@ async def run_agent(chat_oid, message_id):
                         try:
                             # Execute tool asynchronously
                             result = await tool._arun(**tool_args)
-                            logger.info(f"Tool {tool_name} returned: {result[:100]}...")
+                            logger.info(f"Tool {tool_name} returned: {str(result)[:100]}...")
                         except Exception as e:
                             result = f"Error executing tool: {str(e)}"
                             logger.error(f"Tool execution error: {e}")
@@ -201,7 +202,7 @@ async def run_agent(chat_oid, message_id):
                     ))
             else:
                 # Max iterations reached
-                final_text = response.content if hasattr(response, 'content') else "Maximum iterations reached"
+                final_text = response.content if (response and hasattr(response, 'content')) else "Maximum iterations reached"
                 logger.warning(f"Agent reached maximum iterations ({max_iterations})")
             
         except Exception as e:

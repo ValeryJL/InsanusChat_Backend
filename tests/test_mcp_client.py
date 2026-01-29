@@ -11,7 +11,7 @@ async def test_mcp_client_context_manager():
     """Test that MCPClient can be used as an async context manager."""
     async with MCPClient() as client:
         assert client is not None
-        assert client._connected == False  # Not connected yet
+        assert not client.is_connected  # Not connected yet
 
 
 @pytest.mark.asyncio
@@ -19,7 +19,7 @@ async def test_mcp_client_close():
     """Test that MCPClient closes properly."""
     client = MCPClient()
     await client.close()
-    assert client._connected == False
+    assert not client.is_connected
 
 
 # Note: These tests require a running MCP server to be meaningful
