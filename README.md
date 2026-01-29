@@ -124,6 +124,31 @@ This backend has been refactored to leverage **LangChain** for agent execution, 
 - ✅ Enhanced error handling and logging
 - ✅ Comprehensive automated testing
 - ✅ Reorganized project structure with modular models
+- ✅ **Dynamic Model Selection** - Automatically fetches latest models from Google API ⭐ NEW
+
+### Dynamic Model Selection
+
+The CLI now **automatically fetches available models from Google's Generative AI API** when creating agents, ensuring you always see the latest models:
+
+**Features**:
+- ✅ Real-time model list from Google API
+- ✅ Automatic support for new models (like Gemini 2.0)
+- ✅ Graceful fallback to hardcoded models if API unavailable
+- ✅ Works with or without API key
+- ✅ Better model descriptions from API metadata
+
+**Usage**:
+```bash
+> agent new
+Select API Key: 1
+Fetching available models from Google API...
+  1. gemini-1.5-flash - Fast and efficient (recommended)
+  2. gemini-1.5-pro - High capability
+  3. gemini-2.0-flash-exp - Experimental (NEW!)
+Select model: 1
+```
+
+See [docs/DYNAMIC_MODEL_SELECTION.md](docs/DYNAMIC_MODEL_SELECTION.md) for technical details.
 
 See [docs/REFACTORING.md](docs/REFACTORING.md) for complete refactoring details.
 
