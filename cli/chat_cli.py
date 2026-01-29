@@ -51,6 +51,15 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 import httpx
 
+# Import model utilities
+try:
+    from utils.model_utils import get_available_gemini_models
+except ImportError:
+    # Fallback if utils not in path
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.model_utils import get_available_gemini_models
+
 # Color codes for terminal output
 class Colors:
     HEADER = '\033[95m'
@@ -532,18 +541,32 @@ class ChatCLI:
         
         # Model selection
         print(f"\n{Colors.BOLD}Select Model:{Colors.ENDC}")
-        available_models = [
-            ("gemini-1.5-flash", "Gemini 1.5 Flash - Fast and efficient (recommended)"),
-            ("gemini-1.5-pro", "Gemini 1.5 Pro - High capability"),
-            ("gemini-1.5-flash-8b", "Gemini 1.5 Flash 8B - Lightweight and fast"),
-        ]
+        
+        # Try to get API key for fetching models
+        fetch_api_key = None
+        if selected_apikey_id and apikeys_response.status_code == 200:
+            # Get the selected API key's actual key value if available
+            apikeys = apikeys_response.json().get("data", [])
+            for key in apikeys:
+                if key.get("_id") == selected_apikey_id:
+                    fetch_api_key = key.get("key")
+                    break
+        
+        # Fetch available models (with loading indicator)
+        print(f"{Colors.GRAY}Fetching available models from Google API...{Colors.ENDC}")
+        available_models = get_available_gemini_models(fetch_api_key)
         
         for i, (model_name, description) in enumerate(available_models, 1):
-            print(f"  {i}. {Colors.OKGREEN}{model_name}{Colors.ENDC} - {description}")
+            # Highlight recommended model
+            if i == 1:
+                print(f"  {i}. {Colors.OKGREEN}{model_name}{Colors.ENDC} - {description} {Colors.BOLD}(recommended){Colors.ENDC}")
+            else:
+                print(f"  {i}. {Colors.OKGREEN}{model_name}{Colors.ENDC} - {description}")
         
         model_choice = input(f"{Colors.OKCYAN}Select model number (default: 1): {Colors.ENDC}").strip()
         
-        selected_model = "gemini-1.5-flash"  # Default
+        # Default to first model in list
+        selected_model = available_models[0][0] if available_models else "gemini-1.5-flash"
         if model_choice and model_choice.isdigit():
             idx = int(model_choice) - 1
             if 0 <= idx < len(available_models):
