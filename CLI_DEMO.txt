@@ -1,0 +1,132 @@
+=============================================================================
+InsanusChat CLI - Complete Feature Set
+=============================================================================
+
+AUTHENTICATION COMMANDS:
+------------------------
+register              - Register a new user
+login                 - Login with credentials
+logout                - Logout current user
+profile               - View your profile
+
+CHAT MANAGEMENT:
+----------------
+chats                 - List all chats
+chat new              - Create a new chat (NOW WORKS - message optional!)
+chat select <id>      - Select a chat
+chat delete <id>      - Delete a chat
+
+MESSAGES:
+---------
+send <message>        - Send message to current chat
+history               - View chat history
+
+AGENTS:
+-------
+agents                - List all agents
+agent new             - Create a new agent
+agent delete <id>     - Delete an agent
+
+API KEYS: ⭐ NEW
+------------------
+apikeys               - List all API keys
+apikey add            - Add a new API key (provider, key, label)
+apikey delete <id>    - Delete an API key
+
+TOOLS/RESOURCES: ⭐ NEW
+-----------------------
+resources             - List all MCPs and snippets
+mcp add               - Add a new MCP server (stdio/http/sse/websocket)
+mcp delete <id>       - Delete an MCP server
+snippet add           - Add a new code snippet (python/javascript)
+snippet delete <id>   - Delete a code snippet
+
+UTILITIES:
+----------
+clear                 - Clear screen
+help                  - Show this help
+quit/exit             - Exit the CLI
+
+=============================================================================
+EXAMPLE USAGE:
+=============================================================================
+
+# Start the CLI
+python cli/chat_cli.py
+
+# Login
+> login
+Email: user@example.com
+Password: ****
+✓ Logged in as user@example.com
+
+# Create a chat (NOW WORKS WITHOUT MESSAGE!)
+> chat new
+Chat Title (optional): My New Chat
+✓ Chat created: My New Chat
+ℹ Chat ID: 507f1f77bcf86cd799439011
+ℹ Chat auto-selected. You can now send messages!
+
+# Add an API key
+> apikey add
+Provider (e.g., openai, anthropic, google): openai
+API Key: sk-...
+Label (optional): My OpenAI Key
+✓ API key added successfully!
+ℹ ID: 507f1f77bcf86cd799439012
+
+# Add an MCP server
+> mcp add
+MCP Name: Calculator
+Transport Type (stdio/http/sse/websocket) [stdio]: stdio
+Script Path: /path/to/calculator.py
+✓ MCP server added successfully!
+
+# List all resources
+> resources
+
+======================================================================
+                       MCP Servers (1)                            
+======================================================================
+
+  ID: 507f1f77bcf86cd799439013
+  Name: Calculator
+  Transport: stdio
+
+======================================================================
+                       Code Snippets (0)                            
+======================================================================
+
+  No code snippets found
+
+# Add a code snippet
+> snippet add
+Snippet Name: hello_world
+Language (python/javascript) [python]: python
+Description (optional): Simple hello world
+Enter code (press Ctrl+D or Ctrl+Z when done):
+print("Hello, World!")
+^D
+✓ Code snippet added successfully!
+
+=============================================================================
+FIXES IN THIS UPDATE:
+=============================================================================
+
+1. ✅ Chat Creation Fixed
+   - Message is now optional when creating a chat
+   - Can create empty chat and send messages later
+   - Better user experience
+
+2. ✅ API Keys Management Added
+   - List, add, and delete API keys
+   - Support for multiple providers (openai, anthropic, google, etc.)
+   - Optional labels for organization
+
+3. ✅ Tools/Resources Management Added
+   - MCP servers: List, add, delete
+   - Code snippets: List, add, delete
+   - Support for multiple transport types (stdio, http, sse, websocket)
+   - Support for multiple languages (python, javascript)
+
+=============================================================================

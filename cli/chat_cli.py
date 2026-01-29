@@ -485,6 +485,285 @@ class ChatCLI:
         except Exception as e:
             self.print_error(f"Error deleting agent: {e}")
     
+    async def list_apikeys(self):
+        """List all API keys"""
+        if not self.token:
+            self.print_error("Please login first")
+            return
+        
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/api/v1/apikeys/",
+                headers=self.get_headers()
+            )
+            
+            if response.status_code == 200:
+                data = response.json().get("data", [])
+                if not data:
+                    self.print_info("No API keys found")
+                else:
+                    self.print_header(f"API Keys ({len(data)})")
+                    for key in data:
+                        key_id = key.get("_id", "N/A")
+                        provider = key.get("provider", "Unknown")
+                        label = key.get("label", "No label")
+                        print(f"  {Colors.OKBLUE}ID:{Colors.ENDC} {key_id}")
+                        print(f"  {Colors.OKCYAN}Provider:{Colors.ENDC} {provider}")
+                        print(f"  {Colors.OKCYAN}Label:{Colors.ENDC} {label}")
+                        print()
+            else:
+                self.print_error(f"Failed to list API keys: {response.text}")
+        except Exception as e:
+            self.print_error(f"Error listing API keys: {e}")
+    
+    async def add_apikey(self):
+        """Add a new API key"""
+        if not self.token:
+            self.print_error("Please login first")
+            return
+        
+        self.print_header("Add New API Key")
+        provider = input(f"{Colors.OKCYAN}Provider (e.g., openai, anthropic, google): {Colors.ENDC}").strip()
+        key = input(f"{Colors.OKCYAN}API Key: {Colors.ENDC}").strip()
+        label = input(f"{Colors.OKCYAN}Label (optional): {Colors.ENDC}").strip()
+        
+        if not provider or not key:
+            self.print_error("Provider and API key are required")
+            return
+        
+        payload = {
+            "provider": provider,
+            "encrypted_key": key,  # Backend will handle encryption
+        }
+        if label:
+            payload["label"] = label
+        
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/apikeys/",
+                json=payload,
+                headers=self.get_headers()
+            )
+            
+            if response.status_code == 200:
+                data = response.json().get("data", {})
+                self.print_success("API key added successfully!")
+                self.print_info(f"ID: {data.get('_id', 'N/A')}")
+            else:
+                self.print_error(f"Failed to add API key: {response.text}")
+        except Exception as e:
+            self.print_error(f"Error adding API key: {e}")
+    
+    async def delete_apikey(self, key_id: str):
+        """Delete an API key"""
+        if not self.token:
+            self.print_error("Please login first")
+            return
+        
+        confirm = input(f"{Colors.WARNING}Delete API key {key_id}? (yes/no): {Colors.ENDC}").strip().lower()
+        if confirm != "yes":
+            self.print_info("Deletion cancelled")
+            return
+        
+        try:
+            response = await self.client.delete(
+                f"{self.base_url}/api/v1/apikeys/?api_key_id={key_id}",
+                headers=self.get_headers()
+            )
+            
+            if response.status_code == 200:
+                self.print_success("API key deleted")
+            else:
+                self.print_error(f"Failed to delete API key: {response.text}")
+        except Exception as e:
+            self.print_error(f"Error deleting API key: {e}")
+    
+    async def list_resources(self):
+        """List all tools (MCPs and snippets)"""
+        if not self.token:
+            self.print_error("Please login first")
+            return
+        
+        try:
+            response = await self.client.get(
+                f"{self.base_url}/api/v1/resources/",
+                headers=self.get_headers()
+            )
+            
+            if response.status_code == 200:
+                data = response.json().get("data", {})
+                mcps = data.get("mcps", [])
+                snippets = data.get("snippets", [])
+                
+                self.print_header(f"MCP Servers ({len(mcps)})")
+                if not mcps:
+                    print(f"  {Colors.GRAY}No MCP servers found{Colors.ENDC}")
+                else:
+                    for mcp in mcps:
+                        mcp_id = mcp.get("_id", "N/A")
+                        name = mcp.get("name", "Unnamed")
+                        transport = mcp.get("transport_type", "Unknown")
+                        print(f"  {Colors.OKBLUE}ID:{Colors.ENDC} {mcp_id}")
+                        print(f"  {Colors.OKCYAN}Name:{Colors.ENDC} {name}")
+                        print(f"  {Colors.OKCYAN}Transport:{Colors.ENDC} {transport}")
+                        print()
+                
+                self.print_header(f"Code Snippets ({len(snippets)})")
+                if not snippets:
+                    print(f"  {Colors.GRAY}No code snippets found{Colors.ENDC}")
+                else:
+                    for snippet in snippets:
+                        snippet_id = snippet.get("_id", "N/A")
+                        name = snippet.get("name", "Unnamed")
+                        lang = snippet.get("language", "Unknown")
+                        print(f"  {Colors.OKBLUE}ID:{Colors.ENDC} {snippet_id}")
+                        print(f"  {Colors.OKCYAN}Name:{Colors.ENDC} {name}")
+                        print(f"  {Colors.OKCYAN}Language:{Colors.ENDC} {lang}")
+                        print()
+            else:
+                self.print_error(f"Failed to list resources: {response.text}")
+        except Exception as e:
+            self.print_error(f"Error listing resources: {e}")
+    
+    async def add_mcp(self):
+        """Add a new MCP server"""
+        if not self.token:
+            self.print_error("Please login first")
+            return
+        
+        self.print_header("Add New MCP Server")
+        name = input(f"{Colors.OKCYAN}MCP Name: {Colors.ENDC}").strip()
+        transport = input(f"{Colors.OKCYAN}Transport Type (stdio/http/sse/websocket) [stdio]: {Colors.ENDC}").strip() or "stdio"
+        
+        if not name:
+            self.print_error("MCP name is required")
+            return
+        
+        payload = {
+            "name": name,
+            "transport_type": transport,
+        }
+        
+        # Get transport-specific details
+        if transport == "stdio":
+            script_path = input(f"{Colors.OKCYAN}Script Path: {Colors.ENDC}").strip()
+            if script_path:
+                payload["script_path"] = script_path
+        elif transport in ["http", "sse", "websocket"]:
+            url = input(f"{Colors.OKCYAN}URL: {Colors.ENDC}").strip()
+            if url:
+                payload["url"] = url
+        
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/resources/mcps",
+                json=payload,
+                headers=self.get_headers()
+            )
+            
+            if response.status_code == 200:
+                self.print_success("MCP server added successfully!")
+            else:
+                self.print_error(f"Failed to add MCP: {response.text}")
+        except Exception as e:
+            self.print_error(f"Error adding MCP: {e}")
+    
+    async def delete_mcp(self, mcp_id: str):
+        """Delete an MCP server"""
+        if not self.token:
+            self.print_error("Please login first")
+            return
+        
+        confirm = input(f"{Colors.WARNING}Delete MCP server {mcp_id}? (yes/no): {Colors.ENDC}").strip().lower()
+        if confirm != "yes":
+            self.print_info("Deletion cancelled")
+            return
+        
+        try:
+            response = await self.client.delete(
+                f"{self.base_url}/api/v1/resources/mcps?mcp_id={mcp_id}",
+                headers=self.get_headers()
+            )
+            
+            if response.status_code == 200:
+                self.print_success("MCP server deleted")
+            else:
+                self.print_error(f"Failed to delete MCP: {response.text}")
+        except Exception as e:
+            self.print_error(f"Error deleting MCP: {e}")
+    
+    async def add_snippet(self):
+        """Add a new code snippet"""
+        if not self.token:
+            self.print_error("Please login first")
+            return
+        
+        self.print_header("Add New Code Snippet")
+        name = input(f"{Colors.OKCYAN}Snippet Name: {Colors.ENDC}").strip()
+        language = input(f"{Colors.OKCYAN}Language (python/javascript) [python]: {Colors.ENDC}").strip() or "python"
+        description = input(f"{Colors.OKCYAN}Description (optional): {Colors.ENDC}").strip()
+        
+        print(f"{Colors.OKCYAN}Enter code (press Ctrl+D or Ctrl+Z when done):{Colors.ENDC}")
+        code_lines = []
+        try:
+            while True:
+                line = input()
+                code_lines.append(line)
+        except EOFError:
+            pass
+        
+        code = "\n".join(code_lines)
+        
+        if not name or not code:
+            self.print_error("Snippet name and code are required")
+            return
+        
+        payload = {
+            "name": name,
+            "language": language,
+            "code": code,
+        }
+        if description:
+            payload["description"] = description
+        
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/v1/resources/snippets",
+                json=payload,
+                headers=self.get_headers()
+            )
+            
+            if response.status_code == 200:
+                self.print_success("Code snippet added successfully!")
+            else:
+                self.print_error(f"Failed to add snippet: {response.text}")
+        except Exception as e:
+            self.print_error(f"Error adding snippet: {e}")
+    
+    async def delete_snippet(self, snippet_id: str):
+        """Delete a code snippet"""
+        if not self.token:
+            self.print_error("Please login first")
+            return
+        
+        confirm = input(f"{Colors.WARNING}Delete snippet {snippet_id}? (yes/no): {Colors.ENDC}").strip().lower()
+        if confirm != "yes":
+            self.print_info("Deletion cancelled")
+            return
+        
+        try:
+            response = await self.client.delete(
+                f"{self.base_url}/api/v1/resources/snippets?snippet_id={snippet_id}",
+                headers=self.get_headers()
+            )
+            
+            if response.status_code == 200:
+                self.print_success("Code snippet deleted")
+            else:
+                self.print_error(f"Failed to delete snippet: {response.text}")
+        except Exception as e:
+            self.print_error(f"Error deleting snippet: {e}")
+    
     def show_help(self):
         """Show help message"""
         self.print_header("InsanusChat CLI - Help")
@@ -508,6 +787,18 @@ class ChatCLI:
         print(f"  {Colors.OKCYAN}agents{Colors.ENDC}            - List all agents")
         print(f"  {Colors.OKCYAN}agent new{Colors.ENDC}         - Create a new agent")
         print(f"  {Colors.OKCYAN}agent delete <id>{Colors.ENDC} - Delete an agent")
+        print()
+        print(f"{Colors.BOLD}API Keys:{Colors.ENDC}")
+        print(f"  {Colors.OKCYAN}apikeys{Colors.ENDC}           - List all API keys")
+        print(f"  {Colors.OKCYAN}apikey add{Colors.ENDC}        - Add a new API key")
+        print(f"  {Colors.OKCYAN}apikey delete <id>{Colors.ENDC} - Delete an API key")
+        print()
+        print(f"{Colors.BOLD}Tools/Resources:{Colors.ENDC}")
+        print(f"  {Colors.OKCYAN}resources{Colors.ENDC}         - List all MCPs and snippets")
+        print(f"  {Colors.OKCYAN}mcp add{Colors.ENDC}           - Add a new MCP server")
+        print(f"  {Colors.OKCYAN}mcp delete <id>{Colors.ENDC}   - Delete an MCP server")
+        print(f"  {Colors.OKCYAN}snippet add{Colors.ENDC}       - Add a new code snippet")
+        print(f"  {Colors.OKCYAN}snippet delete <id>{Colors.ENDC} - Delete a code snippet")
         print()
         print(f"{Colors.BOLD}Other:{Colors.ENDC}")
         print(f"  {Colors.OKCYAN}clear{Colors.ENDC}             - Clear screen")
@@ -580,6 +871,41 @@ class ChatCLI:
                         await self.delete_agent(parts[2])
                     else:
                         self.print_error("Usage: agent <new|delete> [id]")
+                
+                # API Key commands
+                elif cmd == "apikeys":
+                    await self.list_apikeys()
+                elif cmd == "apikey":
+                    if len(parts) < 2:
+                        self.print_error("Usage: apikey <add|delete> [id]")
+                    elif parts[1] == "add":
+                        await self.add_apikey()
+                    elif parts[1] == "delete" and len(parts) >= 3:
+                        await self.delete_apikey(parts[2])
+                    else:
+                        self.print_error("Usage: apikey <add|delete> [id]")
+                
+                # Resource/Tools commands
+                elif cmd == "resources":
+                    await self.list_resources()
+                elif cmd == "mcp":
+                    if len(parts) < 2:
+                        self.print_error("Usage: mcp <add|delete> [id]")
+                    elif parts[1] == "add":
+                        await self.add_mcp()
+                    elif parts[1] == "delete" and len(parts) >= 3:
+                        await self.delete_mcp(parts[2])
+                    else:
+                        self.print_error("Usage: mcp <add|delete> [id]")
+                elif cmd == "snippet":
+                    if len(parts) < 2:
+                        self.print_error("Usage: snippet <add|delete> [id]")
+                    elif parts[1] == "add":
+                        await self.add_snippet()
+                    elif parts[1] == "delete" and len(parts) >= 3:
+                        await self.delete_snippet(parts[2])
+                    else:
+                        self.print_error("Usage: snippet <add|delete> [id]")
                 
                 # Utility commands
                 elif cmd == "clear":
