@@ -88,6 +88,18 @@ async def run_agent(chat_oid, message_id):
     # Helper to find API keys
     def _find_api_key(provider_name: str) -> Optional[str]:
         """Find API key for given provider from user's keys."""
+        # First, check if agent has a specific API key configured
+        if agent_obj and agent_obj.get("api_key_id"):
+            agent_api_key_id = str(agent_obj.get("api_key_id"))
+            keys = user_doc.get("api_keys", []) if user_doc else []
+            for key_entry in keys:
+                if not isinstance(key_entry, dict):
+                    continue
+                if str(key_entry.get("_id", "")) == agent_api_key_id:
+                    logger.info(f"Using agent-specific API key: {key_entry.get('provider')}")
+                    return key_entry.get("encrypted_key")
+        
+        # Fall back to finding by provider name
         keys = user_doc.get("api_keys", []) if user_doc else []
         for key_entry in keys:
             if not isinstance(key_entry, dict):
@@ -95,6 +107,8 @@ async def run_agent(chat_oid, message_id):
             provider = str(key_entry.get("provider", "")).lower()
             if provider in (provider_name.lower(), "google", "gemini"):
                 return key_entry.get("encrypted_key")
+        
+        # Last resort: environment variable
         return os.environ.get("GOOGLE_API_KEY")
 
     gemini_key = _find_api_key("gemini")

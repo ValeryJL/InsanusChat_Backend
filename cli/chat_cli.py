@@ -483,29 +483,89 @@ class ChatCLI:
             self.print_error(f"Error listing agents: {e}")
     
     async def create_agent(self):
-        """Create a new agent"""
+        """Create a new agent with API key and model selection"""
         if not self.token:
             self.print_error("Please login first")
             return
         
         self.print_header("Create New Agent")
-        name = input(f"{Colors.OKCYAN}Agent Name: {Colors.ENDC}").strip()
-        description = input(f"{Colors.OKCYAN}Description (optional): {Colors.ENDC}").strip()
-        system_prompt = input(f"{Colors.OKCYAN}System Prompt (optional): {Colors.ENDC}").strip()
-        model = input(f"{Colors.OKCYAN}Model (default: gemini-2.0-flash-exp): {Colors.ENDC}").strip()
         
+        # Basic info
+        name = input(f"{Colors.OKCYAN}Agent Name: {Colors.ENDC}").strip()
         if not name:
             self.print_error("Agent name is required")
             return
         
-        payload = {"name": name}
+        description = input(f"{Colors.OKCYAN}Description (optional): {Colors.ENDC}").strip()
+        system_prompt = input(f"{Colors.OKCYAN}System Prompt (optional): {Colors.ENDC}").strip()
+        
+        # API Key selection
+        print(f"\n{Colors.BOLD}Select API Key:{Colors.ENDC}")
+        try:
+            apikeys_response = await self.client.get(
+                f"{self.base_url}/api/v1/apikeys/",
+                headers=self.get_headers()
+            )
+            
+            selected_apikey_id = None
+            if apikeys_response.status_code == 200:
+                apikeys = apikeys_response.json().get("data", [])
+                if apikeys:
+                    for i, key in enumerate(apikeys, 1):
+                        provider = key.get("provider", "Unknown")
+                        label = key.get("label", "No label")
+                        key_id = key.get("_id", "")
+                        print(f"  {i}. {Colors.OKGREEN}{provider}{Colors.ENDC} - {label} (ID: {key_id[:8]}...)")
+                    
+                    apikey_choice = input(f"{Colors.OKCYAN}Select API key number (or press Enter to skip): {Colors.ENDC}").strip()
+                    if apikey_choice and apikey_choice.isdigit():
+                        idx = int(apikey_choice) - 1
+                        if 0 <= idx < len(apikeys):
+                            selected_apikey_id = apikeys[idx].get("_id")
+                            self.print_success(f"Selected API key: {apikeys[idx].get('provider')} - {apikeys[idx].get('label')}")
+                else:
+                    self.print_warning("No API keys found. Agent will use system default.")
+            else:
+                self.print_warning("Could not fetch API keys. Agent will use system default.")
+        except Exception as e:
+            self.print_warning(f"Error fetching API keys: {e}")
+        
+        # Model selection
+        print(f"\n{Colors.BOLD}Select Model:{Colors.ENDC}")
+        available_models = [
+            ("gemini-2.0-flash-exp", "Gemini 2.0 Flash (Experimental) - Fast and efficient"),
+            ("gemini-2.0-flash-thinking-exp", "Gemini 2.0 Flash Thinking - Advanced reasoning"),
+            ("gemini-1.5-pro", "Gemini 1.5 Pro - High capability (deprecated)"),
+            ("gemini-1.5-flash", "Gemini 1.5 Flash - Fast (deprecated)"),
+        ]
+        
+        for i, (model_name, description) in enumerate(available_models, 1):
+            print(f"  {i}. {Colors.OKGREEN}{model_name}{Colors.ENDC} - {description}")
+        
+        model_choice = input(f"{Colors.OKCYAN}Select model number (default: 1): {Colors.ENDC}").strip()
+        
+        selected_model = "gemini-2.0-flash-exp"  # Default
+        if model_choice and model_choice.isdigit():
+            idx = int(model_choice) - 1
+            if 0 <= idx < len(available_models):
+                selected_model = available_models[idx][0]
+        
+        self.print_info(f"Using model: {selected_model}")
+        
+        # Build payload
+        payload = {
+            "name": name,
+            "model_selected": selected_model
+        }
+        
         if description:
             payload["description"] = description
         if system_prompt:
             payload["system_prompt"] = [system_prompt]
-        # Always set model_selected to avoid None values
-        payload["model_selected"] = model if model else "gemini-2.0-flash-exp"
+        if selected_apikey_id:
+            payload["api_key_id"] = selected_apikey_id
         
+        # Create agent
         try:
             response = await self.client.post(
                 f"{self.base_url}/api/v1/agents/",
@@ -517,6 +577,9 @@ class ChatCLI:
                 data = response.json().get("data", {})
                 self.print_success(f"Agent created: {name}")
                 self.print_info(f"Agent ID: {data.get('_id')}")
+                self.print_info(f"Model: {selected_model}")
+                if selected_apikey_id:
+                    self.print_info(f"API Key: Configured")
             else:
                 self.print_error(f"Failed to create agent: {response.text}")
         except Exception as e:

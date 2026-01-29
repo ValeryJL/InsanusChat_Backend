@@ -118,8 +118,9 @@ async def create_agent(
         "snippets": snippets,
         "active_tools": payload.get("active_tools", []),
         "active_mcps": payload.get("active_mcps", []),
-        "model_selected": payload.get("model_selected"),
+        "model_selected": payload.get("model_selected") or "gemini-2.0-flash-exp",
         "model_fallback": payload.get("model_fallback"),
+        "api_key_id": payload.get("api_key_id"),  # Optional API key association
         "metadata": payload.get("metadata", {}),
         "created_at": datetime.utcnow(),
         "active": True,
@@ -147,7 +148,7 @@ async def update_agent(
 ):
     """Actualizar campos permitidos del agente embebido.
 
-    Campos permitidos: name, description, system_prompt (lista), active_tools, active_mcps, model_selected, model_fallback, metadata, active
+    Campos permitidos: name, description, system_prompt (lista), active_tools, active_mcps, model_selected, model_fallback, api_key_id, metadata, active
     Para actualizar snippets usa PUT específico o reemplaza la lista completa en `snippets`.
     """
     if not authorization or not authorization.startswith("Bearer "):
@@ -165,7 +166,7 @@ async def update_agent(
     except Exception:
         raise HTTPException(status_code=400, detail="agent_id inválido")
 
-    allowed = {"name", "description", "system_prompt", "active_tools", "active_mcps", "model_selected", "model_fallback", "metadata", "active", "snippets"}
+    allowed = {"name", "description", "system_prompt", "active_tools", "active_mcps", "model_selected", "model_fallback", "api_key_id", "metadata", "active", "snippets"}
     update_fields = {}
     if payload:
         for k, v in payload.items():
