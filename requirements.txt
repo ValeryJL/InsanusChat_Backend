@@ -9,7 +9,10 @@ passlib[bcrypt]==1.7.0              # Biblioteca de hashing de contraseñas; el 
 python-jose[cryptography]==3.3.0    # Implementación JOSE/JWT para crear/verificar tokens JWT; usa cryptography para operaciones criptográficas
 httpx>=0.25.0                       # Cliente HTTP async usado por services.tools.call_mcp (>=0.25.0 para compat con jupyterlab)
 pytest==7.4.0                       # Framework de testing
-mcp[client]==1.21.0                 # Cliente MCP para integración con el servicio MCP de Insanus Tech
+mcp==1.1.0                          # Cliente MCP para integración con el servicio MCP
 anthropic==0.72.0                   # Cliente oficial de Anthropic API para modelos Claude
-langchain>=0.0.300                 # Framework de agentes y chains (adaptador inicial)
-google-generativeai>=0.3.0         # Cliente oficial para la Generative API (Gemini)
+langchain>=0.3.0                    # Framework de agentes y chains
+langchain-core>=0.3.0               # Core components de LangChain
+langchain-google-genai>=2.0.0       # Integración de LangChain con Google Generative AI (Gemini)
+google-generativeai>=0.3.0          # Cliente oficial para la Generative API (Gemini)
+python-dotenv>=1.0.0                # Para cargar variables de entorno desde .env

@@ -45,11 +45,27 @@ async def execute_snippet(
     """Execute a code snippet in a subprocess with timeout and capture.
 
     snippet: {"language": "python"|"javascript", "code": "..."}
+    input_data: Optional input data to pass to the snippet (will be JSON-serialized)
+    timeout: Execution timeout in seconds (default: 8)
+    workdir: Working directory for execution (default: system temp dir)
+    
     Returns a dict with success/result/stdout/stderr or error.
-    Security note: this runs arbitrary code in a subprocess. For production use a sandbox/container.
+    
+    Security notes:
+    - This runs arbitrary code in a subprocess
+    - For production use, consider:
+      * Running in a sandboxed container (Docker/Kubernetes)
+      * Using a secure execution environment (gVisor, Firecracker)
+      * Implementing resource limits (CPU, memory, disk)
+      * Network isolation
+      * Input validation and sanitization
     """
     lang = (snippet.get("language") or "javascript").lower()
     code = snippet.get("code") or ""
+    
+    if not code.strip():
+        return {"success": False, "error": "empty_code", "stdout": "", "stderr": ""}
+    
     stdin_bytes = None
     if input_data is not None:
         try:

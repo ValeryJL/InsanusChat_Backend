@@ -1,11 +1,63 @@
-(# Environment file - keep secrets out of VCS)
-.env*
-uvicorn.*
-
-.secrets/
-.venv/
-.vscode/
+# Python
 __pycache__/
 *.py[cod]
-secrets/
-scripts/
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and certificates
+secrets/*.pem
+secrets/*.key
+secrets/*.csr
+secrets/*.srl
+!secrets/.gitkeep
+
+# MongoDB data
+mongodb_data/
+
+# Temporary files
+tmp/
+*.tmp
+*.log
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/

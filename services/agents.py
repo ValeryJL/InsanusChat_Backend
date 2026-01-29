@@ -1,189 +1,217 @@
 import asyncio
 import logging
 import os
-import json
-import httpx
 from datetime import datetime
 from typing import List, Optional, Any, Dict
 
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+from langchain_core.chat_history import BaseChatMessageHistory, InMemoryChatMessageHistory
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 from models import PyObjectId
 from database import get_message_collection, get_chat_collection, get_user_collection
-from services.mcp_helpers import validate_mcp_entry, build_connect_params
-from services.mcp_client import MCPClient
-from services.snippets import execute_snippet
+from services.langchain_tools import create_mcp_tools, create_snippet_tools
 
 logger = logging.getLogger(__name__)
 
-async def _build_history(chat_oid, max_messages: int = 15) -> List[dict]:
+async def _build_langchain_history(chat_oid, max_messages: int = 15) -> List[Any]:
+    """
+    Build LangChain-compatible message history from database.
+    
+    Returns a list of LangChain message objects (HumanMessage, AIMessage, SystemMessage).
+    """
     msgs_col = get_message_collection()
     cursor = msgs_col.find({"chat_id": chat_oid}).sort("created_at", -1).limit(max_messages)
     docs = [d async for d in cursor]
     docs.reverse()
-    out = []
-    for d in docs:
-        out.append({
-            "role": d.get("role") or "user",
-            "content": d.get("content") or d.get("text") or "",
-        })
-    return out
+    
+    messages = []
+    for doc in docs:
+        role = (doc.get("role") or "user").lower()
+        content = doc.get("content") or doc.get("text") or ""
+        
+        if role in ("assistant", "agent"):
+            messages.append(AIMessage(content=content))
+        elif role == "system":
+            messages.append(SystemMessage(content=content))
+        else:  # user or any other role
+            messages.append(HumanMessage(content=content))
+    
+    return messages
 
 async def run_agent(chat_oid, message_id):
     """
-    Master Runner for agents.
-    Integrates Gemini (LangChain), MCP Tools and Code Snippets.
+    Master Runner for agents using LangChain framework.
+    
+    This function integrates:
+    - Gemini LLM via LangChain
+    - MCP Tools (wrapped as LangChain tools)
+    - Code Snippets (wrapped as LangChain tools)
+    
+    The agent uses LangChain's built-in tool calling loop for better reliability.
     """
     msgs_col = get_message_collection()
     chats_col = get_chat_collection()
     users_col = get_user_collection()
 
+    # Load documents
     try:
         chat_doc = await chats_col.find_one({"_id": chat_oid})
         message_doc = await msgs_col.find_one({"_id": message_id})
-        if not chat_doc or not message_doc: return None
+        if not chat_doc or not message_doc:
+            logger.error(f"Chat or message not found: chat_id={chat_oid}, msg_id={message_id}")
+            return None
     except Exception as e:
-        logger.error(f"Error loading docs: {e}")
+        logger.error(f"Error loading documents: {e}")
         return None
 
+    # Get user and agent
     owner_id = chat_doc.get("owner_id") or chat_doc.get("user_id")
     user_doc = None
     agent_obj = None
     
     if owner_id:
         try:
-            if isinstance(owner_id, str): owner_id = PyObjectId.parse(owner_id)
+            if isinstance(owner_id, str):
+                owner_id = PyObjectId.parse(owner_id)
             user_doc = await users_col.find_one({"_id": owner_id})
-        except Exception: pass
+        except Exception as e:
+            logger.warning(f"Error loading user: {e}")
 
     if user_doc:
         raw_agent = chat_doc.get("agent_id")
-        for a in user_doc.get("agents", []) or []:
-            if str(a.get("_id")) == str(raw_agent):
-                agent_obj = a
+        for agent in user_doc.get("agents", []) or []:
+            if str(agent.get("_id")) == str(raw_agent):
+                agent_obj = agent
                 break
 
+    # Helper to find API keys
     def _find_api_key(provider_name: str) -> Optional[str]:
+        """Find API key for given provider from user's keys."""
         keys = user_doc.get("api_keys", []) if user_doc else []
-        for k in keys:
-            if not isinstance(k, dict): continue
-            p = str(k.get("provider", "")).lower()
-            if p in (provider_name.lower(), "google", "gemini"):
-                return k.get("encrypted_key")
+        for key_entry in keys:
+            if not isinstance(key_entry, dict):
+                continue
+            provider = str(key_entry.get("provider", "")).lower()
+            if provider in (provider_name.lower(), "google", "gemini"):
+                return key_entry.get("encrypted_key")
         return os.environ.get("GOOGLE_API_KEY")
 
     gemini_key = _find_api_key("gemini")
     user_text = message_doc.get("content") or ""
     
-    # 1. Resolve Tools
-    tools_to_bind = []
-    mcp_tool_map = {} # tool_name -> (mcp_id, connect_params, real_tool_name)
-    snippet_tool_map = {} # tool_name -> (snippet_id, language, code)
-
-    if agent_obj and user_doc:
-        # MCP tools
-        mcps_map = {str(m.get("_id")): m for m in user_doc.get("mcps", []) or []}
-        for m_id in agent_obj.get("mcp_ids", []) or []:
-            m_id_s = str(m_id)
-            if m_id_s in mcps_map:
-                try:
-                    mentry = validate_mcp_entry(mcps_map[m_id_s])
-                    cparams = build_connect_params(mentry)
-                    async with MCPClient() as client:
-                        await client.connect_to_server(**cparams)
-                        server_tools = await client.get_tools()
-                        for st in server_tools:
-                            tname = f"mcp_{m_id_s}_{st.name}"
-                            mcp_tool_map[tname] = (m_id_s, cparams, st.name)
-                            tools_to_bind.append({
-                                "name": tname,
-                                "description": st.description or f"MCP tool {st.name}",
-                                "parameters": st.inputSchema
-                            })
-                except Exception as e:
-                    logger.warning(f"Error loading MCP tools for {m_id_s}: {e}")
-
-        # Snippet tools
-        snippets_map = {str(s.get("_id")): s for s in user_doc.get("snippets", []) or []}
-        for s_id in agent_obj.get("snippet_ids", []) or []:
-            s_id_s = str(s_id)
-            if s_id_s in snippets_map:
-                s = snippets_map[s_id_s]
-                tname = f"snippet_{s_id_s}"
-                snippet_tool_map[tname] = (s_id_s, s.get("language"), s.get("code"))
-                tools_to_bind.append({
-                    "name": tname,
-                    "description": f"Execute Python/JS snippet: {s.get('name') or s_id_s}",
-                    "parameters": {"type": "object", "properties": {"input_data": {"type": "string"}}}
-                })
-
-    # 2. Setup Gemini
+    # Initialize response
     final_text = ""
-    if gemini_key:
+    
+    if not gemini_key:
+        final_text = "Error: No Gemini API key configured"
+        logger.error("No Gemini API key found for agent execution")
+    else:
         try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
+            # 1. Create LangChain tools from MCP servers and snippets
+            logger.info("Creating LangChain tools...")
+            mcp_tools = await create_mcp_tools(user_doc, agent_obj)
+            snippet_tools = await create_snippet_tools(user_doc, agent_obj)
+            all_tools = mcp_tools + snippet_tools
             
-            model_name = agent_obj.get("model_selected") or "gemini-flash-latest" if agent_obj else "gemini-flash-latest"
-            model = ChatGoogleGenerativeAI(google_api_key=gemini_key, model=model_name, temperature=0.7)
-            if tools_to_bind:
-                model = model.bind_tools(tools_to_bind)
+            logger.info(f"Created {len(all_tools)} tools ({len(mcp_tools)} MCP, {len(snippet_tools)} snippets)")
+            
+            # 2. Setup Gemini model with LangChain
+            model_name = agent_obj.get("model_selected", "gemini-1.5-flash") if agent_obj else "gemini-1.5-flash"
+            temperature = agent_obj.get("temperature", 0.7) if agent_obj else 0.7
+            
+            model = ChatGoogleGenerativeAI(
+                google_api_key=gemini_key,
+                model=model_name,
+                temperature=temperature
+            )
+            
+            # Bind tools if available
+            if all_tools:
+                model = model.bind_tools(all_tools)
+                logger.info(f"Bound {len(all_tools)} tools to model")
 
-            history = await _build_history(chat_oid)
+            # 3. Build message history
+            history = await _build_langchain_history(chat_oid, max_messages=15)
+            
+            # Add system prompt if configured
             messages = []
             if agent_obj and agent_obj.get("system_prompt"):
-                messages.append(SystemMessage(content=str(agent_obj["system_prompt"])))
+                system_content = _build_system_prompt(agent_obj)
+                messages.append(SystemMessage(content=system_content))
             
-            for h in history:
-                r = h["role"].lower()
-                c = h["content"] or ""
-                if r in ("assistant", "agent"): messages.append(AIMessage(content=c))
-                elif r == "system": messages.append(SystemMessage(content=c))
-                else: messages.append(HumanMessage(content=c))
+            # Add history
+            messages.extend(history)
             
+            # Add current user message if not already in history
             if not messages or (messages[-1].content != user_text):
                 messages.append(HumanMessage(content=user_text))
 
-            # 3. Execution Loop
-            for _ in range(5):
-                res = await asyncio.to_thread(model.invoke, messages)
-                messages.append(res)
+            # 4. Execute agent loop with tool calling
+            logger.info(f"Starting agent execution loop with {len(messages)} messages")
+            max_iterations = 5
+            
+            for iteration in range(max_iterations):
+                logger.info(f"Agent iteration {iteration + 1}/{max_iterations}")
                 
-                if not getattr(res, "tool_calls", None):
-                    final_text = res.content
+                # Invoke model
+                response = await asyncio.to_thread(model.invoke, messages)
+                messages.append(response)
+                
+                # Check if model wants to call tools
+                tool_calls = getattr(response, "tool_calls", None)
+                if not tool_calls:
+                    # No more tool calls - extract final response
+                    final_text = response.content
+                    logger.info("Agent completed without tool calls")
                     break
                 
-                for tc in res.tool_calls:
-                    tname = tc["name"]
-                    targs = tc["args"]
-                    tcall_id = tc["id"]
+                # Execute tool calls
+                logger.info(f"Executing {len(tool_calls)} tool calls")
+                for tool_call in tool_calls:
+                    tool_name = tool_call["name"]
+                    tool_args = tool_call.get("args", {})
+                    tool_call_id = tool_call.get("id", "unknown")
                     
-                    result_content = "Tool not found"
-                    if tname in mcp_tool_map:
-                        mid, cp, real_tname = mcp_tool_map[tname]
-                        try:
-                            async with MCPClient() as client:
-                                await client.connect_to_server(**cp)
-                                mcp_res = await client.call_tool(real_tname, targs)
-                                result_content = str(mcp_res.content)
-                        except Exception as e:
-                            result_content = f"Error calling MCP tool: {e}"
-                    elif tname in snippet_tool_map:
-                        sid, lang, code = snippet_tool_map[tname]
-                        try:
-                            py_res = await execute_snippet(lang, code, payload=json.dumps(targs))
-                            result_content = py_res.get("stdout") or py_res.get("stderr") or "Success (No output)"
-                        except Exception as e:
-                            result_content = f"Error executing snippet: {e}"
+                    logger.info(f"Calling tool: {tool_name} with args: {tool_args}")
                     
-                    messages.append(ToolMessage(content=result_content, tool_call_id=tcall_id))
+                    # Find the tool
+                    tool = None
+                    for t in all_tools:
+                        if t.name == tool_name:
+                            tool = t
+                            break
+                    
+                    if tool:
+                        try:
+                            # Execute tool asynchronously
+                            result = await tool._arun(**tool_args)
+                            logger.info(f"Tool {tool_name} returned: {result[:100]}...")
+                        except Exception as e:
+                            result = f"Error executing tool: {str(e)}"
+                            logger.error(f"Tool execution error: {e}")
+                    else:
+                        result = f"Tool {tool_name} not found"
+                        logger.warning(f"Tool not found: {tool_name}")
+                    
+                    # Add tool result to messages
+                    messages.append(ToolMessage(
+                        content=str(result),
+                        tool_call_id=tool_call_id
+                    ))
+            else:
+                # Max iterations reached
+                final_text = response.content if hasattr(response, 'content') else "Maximum iterations reached"
+                logger.warning(f"Agent reached maximum iterations ({max_iterations})")
             
         except Exception as e:
-            logger.error(f"Gemini Execution Error: {e}")
-            final_text = f"Error en la ejecución: {str(e)}"
+            logger.exception(f"Error during agent execution: {e}")
+            final_text = f"Error en la ejecución del agente: {str(e)}"
 
     if not final_text:
-        final_text = "No se pudo obtener una respuesta de Gemini."
+        final_text = "No se pudo obtener una respuesta del agente."
 
-    # 4. Save Response
+    # 5. Save response to database
     response_doc = {
         "_id": PyObjectId.new(),
         "chat_id": chat_oid,
@@ -197,4 +225,24 @@ async def run_agent(chat_oid, message_id):
         "status": "done",
         "created_at": datetime.utcnow(),
     }
+    
+    logger.info(f"Agent execution complete. Response length: {len(final_text)} chars")
     return response_doc
+
+
+def _build_system_prompt(agent_obj: Dict[str, Any]) -> str:
+    """
+    Build system prompt from agent configuration.
+    
+    Supports:
+    - Simple string system prompt
+    - List of strings (joined with newlines)
+    - TODO: Template expansion for snippets
+    """
+    system_prompt = agent_obj.get("system_prompt", "")
+    
+    if isinstance(system_prompt, list):
+        # Join list items
+        return "\n".join(str(item) for item in system_prompt)
+    
+    return str(system_prompt)
