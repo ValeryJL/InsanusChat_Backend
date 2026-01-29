@@ -10,7 +10,7 @@ python-jose[cryptography]==3.3.0    # Implementación JOSE/JWT para crear/verifi
 httpx>=0.25.0                       # Cliente HTTP async usado por services.tools.call_mcp (>=0.25.0 para compat con jupyterlab)
 pytest==7.4.0                       # Framework de testing
 pytest-asyncio>=0.21.0              # Soporte pytest para funciones async
-mcp==1.1.0                          # Cliente MCP para integración con el servicio MCP
+mcp>=1.23.0                         # Cliente MCP para integración (>=1.23.0 para patches de seguridad: DNS rebinding, DoS fixes)
 anthropic==0.72.0                   # Cliente oficial de Anthropic API para modelos Claude
 langchain>=0.3.0                    # Framework de agentes y chains
 langchain-core>=0.3.0               # Core components de LangChain
