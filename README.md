@@ -53,9 +53,48 @@ The server will start at `http://localhost:8000`
 # Use the interactive CLI
 python cli/chat_cli.py
 
+# Connect to a different server
+python cli/chat_cli.py --url http://your-server:8000
+
 # Or run comprehensive tests
 python tests/test_api_comprehensive.py
 ```
+
+## Interactive CLI
+
+The CLI provides a convenient way to interact with the backend:
+
+```bash
+python cli/chat_cli.py
+```
+
+**Available Commands:**
+
+**Authentication:**
+- `register` - Register a new user
+- `login` - Login with credentials
+- `logout` - Logout current user
+- `profile` - View your profile
+
+**Chat Management:**
+- `chats` - List all chats
+- `chat new` - Create a new chat
+- `chat select <id>` - Select a chat
+- `chat delete <id>` - Delete a chat
+
+**Messages:**
+- `send <message>` - Send message to current chat
+- `history` - View chat history
+
+**Agents:**
+- `agents` - List all agents
+- `agent new` - Create a new agent
+- `agent delete <id>` - Delete an agent
+
+**Utilities:**
+- `help` - Show all commands
+- `clear` - Clear screen
+- `quit/exit` - Exit CLI
 
 ## Recent Improvements (2025-01)
 
