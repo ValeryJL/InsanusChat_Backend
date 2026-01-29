@@ -12,10 +12,9 @@ from typing import List, Tuple, Optional
 logger = logging.getLogger(__name__)
 
 # Fallback models if API fetch fails
+# Only includes models verified to work with Google's Generative AI API
 FALLBACK_MODELS = [
     ("gemini-1.5-flash", "Gemini 1.5 Flash - Fast and efficient (recommended)"),
-    ("gemini-1.5-pro", "Gemini 1.5 Pro - High capability"),
-    ("gemini-1.5-flash-8b", "Gemini 1.5 Flash 8B - Lightweight and fast"),
 ]
 
 
