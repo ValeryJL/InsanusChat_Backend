@@ -492,6 +492,7 @@ class ChatCLI:
         name = input(f"{Colors.OKCYAN}Agent Name: {Colors.ENDC}").strip()
         description = input(f"{Colors.OKCYAN}Description (optional): {Colors.ENDC}").strip()
         system_prompt = input(f"{Colors.OKCYAN}System Prompt (optional): {Colors.ENDC}").strip()
+        model = input(f"{Colors.OKCYAN}Model (default: gemini-2.0-flash-exp): {Colors.ENDC}").strip()
         
         if not name:
             self.print_error("Agent name is required")
@@ -502,6 +503,8 @@ class ChatCLI:
             payload["description"] = description
         if system_prompt:
             payload["system_prompt"] = [system_prompt]
+        # Always set model_selected to avoid None values
+        payload["model_selected"] = model if model else "gemini-2.0-flash-exp"
         
         try:
             response = await self.client.post(

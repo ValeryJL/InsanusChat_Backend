@@ -117,8 +117,9 @@ async def run_agent(chat_oid, message_id):
             logger.info(f"Created {len(all_tools)} tools ({len(mcp_tools)} MCP, {len(snippet_tools)} snippets)")
             
             # 2. Setup Gemini model with LangChain
-            model_name = agent_obj.get("model_selected", "gemini-1.5-flash") if agent_obj else "gemini-1.5-flash"
-            temperature = agent_obj.get("temperature", 0.7) if agent_obj else 0.7
+            # Handle None values by using 'or' operator - dict.get() returns None if key exists with None value
+            model_name = (agent_obj.get("model_selected") if agent_obj else None) or "gemini-2.0-flash-exp"
+            temperature = (agent_obj.get("temperature") if agent_obj else None) or 0.7
             
             model = ChatGoogleGenerativeAI(
                 google_api_key=gemini_key,
