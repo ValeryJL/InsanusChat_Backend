@@ -1,299 +1,295 @@
-from datetime import datetime
+"""
+Servicio de Árbol de Mensajes y Manejador WebSocket (HU-02, HU-03, HU-08).
+- Gestiona inserción de mensajes en árbol (`parent_id`, `children_ids`, `path`, `branch_anchor`, `cousin_left`, `cousin_right`).
+- Previene deadlocks del lock de chat con TTL de 120 segundos y liberación garantizada en `finally` (HU-03).
+- Permite cancelar la generación en curso con `{"cmd": "stop_generation"}` (HU-08).
+"""
 import asyncio
+import json
 import logging
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional
 
-# tiempo por defecto (segundos) de inactividad tras el cual se cierra la conexión
-DEFAULT_WS_IDLE_TIMEOUT = 300  # 5 minutos
-
-from database import get_message_collection, get_chat_collection
+from database import get_chat_collection, get_message_collection
 from models import PyObjectId
 from services import agents as agents_service
+from services.node_bridge import node_bridge
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_WS_IDLE_TIMEOUT = 600  # 10 minutos
+CHAT_LOCK_TTL_SECONDS = 120    # TTL de 120s para evitar chats bloqueados permanentemente (HU-03)
 
 LEFT = "left"
 RIGHT = "right"
 
-async def send_message(message_doc, chat_oid, manager=None):
-    """Insert message_doc into DB and broadcast via manager if provided."""
+# Registro en memoria de tareas de generación activas por chat_id (str) para soportar stop_generation
+ACTIVE_GENERATION_TASKS: Dict[str, asyncio.Task] = {}
+
+
+def is_chat_currently_locked(chat_doc: Optional[Dict[str, Any]]) -> bool:
+    """
+    HU-03: Comprueba si un chat está bloqueado respetando el TTL de 120 segundos.
+    Si `locked` es True pero `locked_at` expiró (o no existe y `last_updated` expiró), devuelve False.
+    """
+    if not chat_doc or not chat_doc.get("locked"):
+        return False
+    locked_at = chat_doc.get("locked_at") or chat_doc.get("last_updated")
+    if isinstance(locked_at, datetime):
+        if datetime.utcnow() - locked_at > timedelta(seconds=CHAT_LOCK_TTL_SECONDS):
+            return False
+    return True
+
+
+async def acquire_chat_lock(chat_oid: Any, manager: Any = None) -> bool:
+    """Adquiere el lock del chat con timestamp `locked_at` y lo anuncia por WebSocket."""
+    chats = get_chat_collection()
+    now = datetime.utcnow()
+    cutoff = now - timedelta(seconds=CHAT_LOCK_TTL_SECONDS)
+    try:
+        chat_doc = await chats.find_one({"_id": chat_oid})
+        if is_chat_currently_locked(chat_doc):
+            return False
+        await chats.update_one(
+            {"_id": chat_oid},
+            {"$set": {"locked": True, "locked_at": now, "last_updated": now}},
+        )
+        if manager is not None:
+            await manager.broadcast(str(chat_oid), {"cmd": "chat_locked", "message": {"locked": True}})
+        return True
+    except Exception as e:
+        logger.warning("Error adquiriendo lock de chat %s: %s", chat_oid, e)
+        return True
+
+
+async def release_chat_lock(chat_oid: Any, manager: Any = None):
+    """Libera siempre el lock del chat y anuncia `chat_unlocked` por WebSocket."""
+    chats = get_chat_collection()
+    try:
+        await chats.update_one(
+            {"_id": chat_oid},
+            {"$set": {"locked": False, "locked_at": None, "last_updated": datetime.utcnow()}},
+        )
+    except Exception as e:
+        logger.warning("Error liberando lock en DB para chat %s: %s", chat_oid, e)
+    if manager is not None:
+        try:
+            await manager.broadcast(str(chat_oid), {"cmd": "chat_unlocked", "message": {"locked": False}})
+        except Exception:
+            pass
+
+
+async def send_message(message_doc: Dict[str, Any], chat_oid: Any, manager: Any = None):
+    """Inserta `message_doc` en la colección `messages`, actualiza `children_ids` del padre y emite por WS."""
+    if not message_doc:
+        return None
     msgs = get_message_collection()
+    chats = get_chat_collection()
+
+    if isinstance(message_doc.get("_id"), str):
+        try:
+            message_doc["_id"] = PyObjectId.parse(message_doc["_id"])
+        except Exception:
+            message_doc["_id"] = PyObjectId.new()
+    elif message_doc.get("_id") is None:
+        message_doc["_id"] = PyObjectId.new()
+
     parent_id = message_doc.get("parent_id")
     if isinstance(parent_id, str):
         try:
             message_doc["parent_id"] = PyObjectId.parse(parent_id)
         except Exception:
-            # leave as-is if cannot parse
             pass
 
-    # perform insertion
     res = await msgs.insert_one(message_doc)
-    try:
-        msg_id = res.inserted_id
-    except Exception:
-        msg_id = None
+    msg_id = res.inserted_id
     message_doc["_id"] = msg_id
 
-    # If there is a parent, push this id into its children_ids and possibly update branches
+    # Actualizar contador y timestamp del chat
+    try:
+        await chats.update_one(
+            {"_id": chat_oid},
+            {"$inc": {"message_count": 1}, "$set": {"last_updated": datetime.utcnow()}},
+        )
+    except Exception:
+        pass
+
+    # Si tiene padre, actualizar children_ids y punteros de ramas laterales
     if message_doc.get("parent_id") is not None:
         try:
             parent = await msgs.find_one({"_id": message_doc.get("parent_id")})
         except Exception:
             parent = None
 
-        # schedule branch-anchor updates if parent had more than one child before insertion
+        if parent and len(parent.get("children_ids", [])) > 0:
+            try:
+                asyncio.create_task(update_rightmost_branch(parent, msg_id))
+            except Exception:
+                pass
+
         try:
-            if parent and len(parent.get("children_ids", [])) > 0:
-                # previous rightmost child is at index -2
-                try:
-                    asyncio.create_task(update_rightmost_branch(parent, msg_id))
-                except Exception:
-                    pass
+            await msgs.update_one(
+                {"_id": message_doc.get("parent_id")},
+                {"$push": {"children_ids": msg_id}},
+            )
         except Exception:
             pass
 
-        # push new child id into parent's children_ids for navigation
-        try:
-            await msgs.update_one({"_id": message_doc.get("parent_id")}, {"$push": {"children_ids": msg_id}})
-        except Exception:
-            pass
-
-    # Broadcast the inserted message to websocket clients in the chat (if manager provided).
-    # We first send an ACK envelope (nested under 'mensaje') and then the normal message.
     if manager is not None:
         try:
             chat_key = str(chat_oid)
-            # send a minimal ACK (only the inserted id) to avoid duplicating full message content
-            try:
-                ack_payload = {"_id": str(msg_id)} if msg_id is not None else {"_id": None}
-            except Exception:
-                ack_payload = {"_id": msg_id}
-            ack_envelope = {"cmd": "ack", "message": ack_payload}
+            ack_envelope = {"cmd": "ack", "message": {"_id": str(msg_id)}}
             await manager.broadcast(chat_key, ack_envelope)
-            # Normal message broadcast (ConnectionManager will envelope it if needed)
             await manager.broadcast(chat_key, message_doc)
         except Exception:
-            try:
-                logging.exception("send_message: failed to broadcast message or ack")
-            except Exception:
-                pass
+            logger.exception("send_message: fallo al hacer broadcast de mensaje o ack")
 
     return msg_id
 
-async def process_user_message(chat_oid, message, manager=None):
-    """Insert user message, broadcast it, call agent to generate a response, insert and broadcast response.
 
-    parent_id may be None (in which case we resolve to last message or create a root if none).
-    This function acquires a per-chat lock to avoid concurrent agent processing for the same chat.
+async def process_user_message(chat_oid: Any, message: Dict[str, Any], manager: Any = None) -> Dict[str, Any]:
     """
-    chats = get_chat_collection()
-    
-    # mark chat locked
+    Inserta el mensaje del usuario, adquiere el lock con TTL, lanza la ejecución del agente
+    en background y garantiza en un bloque `finally` que el chat siempre se desbloquee (HU-03).
+    """
+    await acquire_chat_lock(chat_oid, manager=manager)
+
     try:
-        await chats.update_one({"_id": chat_oid}, {"$set": {"locked": True}})
-    except Exception:
-        pass
-    # announce lock to websocket clients
-    try:
-        if manager is not None:
-            try:
-                chat_key = str(chat_oid)
-                lock_env = {"cmd": "chat_locked", "message": {"locked": True}}
-                await manager.broadcast(chat_key, lock_env)
-            except Exception:
-                try:
-                    logging.exception("process_user_message: failed to broadcast chat_locked")
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    # insert initial system message (send_message returns the inserted _id)
-    message_id = await send_message(message, chat_oid, manager=manager)
-    # attach the inserted id back into the message for caller convenience
-    try:
+        message_id = await send_message(message, chat_oid, manager=manager)
         message["_id"] = message_id
     except Exception:
-        pass
-    # Build a detailed system prompt for the greeting. This prompt will be passed
-    # to the agent runner via agent_params so the agent knows to generate the welcome.
-    # The prompt describes the agent role and the expected welcome message.
+        await release_chat_lock(chat_oid, manager=manager)
+        raise
 
-    # schedule agent run on the starter message (does insertion of agent response)
-    async def _run_init():
+    chat_key = str(chat_oid)
+
+    async def _run_agent_with_guaranteed_unlock():
         try:
-            response = await agents_service.run_agent(chat_oid, message_id)
-            await send_message(response, chat_oid, manager=manager)
-            # unlock chat
-            await chats.update_one({"_id": chat_oid}, {"$set": {"locked": False}})
-            # announce unlock to websocket clients
-            try:
-                if manager is not None:
-                    try:
-                        chat_key = str(chat_oid)
-                        unlock_env = {"cmd": "chat_unlocked", "message": {"locked": False}}
-                        await manager.broadcast(chat_key, unlock_env)
-                    except Exception:
-                        try:
-                            logging.exception("process_user_message: failed to broadcast chat_unlocked")
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-        except Exception:
-            # best-effort: ensure chat unlocked
-            try:
-                await chats.update_one({"_id": chat_oid}, {"$set": {"locked": False}})
-            except Exception:
-                pass
-            # announce unlock even if we hit exception
-            try:
-                if manager is not None:
-                    try:
-                        chat_key = str(chat_oid)
-                        unlock_env = {"cmd": "chat_unlocked", "message": {"locked": False}}
-                        await manager.broadcast(chat_key, unlock_env)
-                    except Exception:
-                        try:
-                            logging.exception("process_user_message: failed to broadcast chat_unlocked after exception")
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+            response = await agents_service.run_agent(chat_oid, message_id, manager=manager)
+            if response:
+                await send_message(response, chat_oid, manager=manager)
+        except asyncio.CancelledError:
+            logger.info("Generación cancelada por el usuario para el chat %s", chat_key)
+            cancel_doc = {
+                "_id": PyObjectId.new(),
+                "chat_id": chat_oid,
+                "parent_id": message_id,
+                "children_ids": [],
+                "path": list(message.get("path", [])) + [message_id],
+                "branch_anchor": message.get("branch_anchor"),
+                "cousin_left": message.get("cousin_left"),
+                "cousin_right": message.get("cousin_right"),
+                "sender_id": "SYSTEM",
+                "role": "agent",
+                "content": "*(Generación detenida por el usuario)*",
+                "content_type": "markdown",
+                "status": "stopped",
+                "tokens_used": 0,
+                "created_at": datetime.utcnow(),
+            }
+            await send_message(cancel_doc, chat_oid, manager=manager)
+        except Exception as e:
+            logger.exception("Error ejecutando agente en chat %s: %s", chat_key, e)
+        finally:
+            ACTIVE_GENERATION_TASKS.pop(chat_key, None)
+            await release_chat_lock(chat_oid, manager=manager)
 
-    asyncio.create_task(_run_init())
+    task = asyncio.create_task(_run_agent_with_guaranteed_unlock())
+    ACTIVE_GENERATION_TASKS[chat_key] = task
     return message
 
-async def update_rightmost_branch(parent, new_msg_oid):
+
+async def update_rightmost_branch(parent: Dict[str, Any], new_msg_oid: Any):
     msgs_col = get_message_collection()
-    original_anchor = None
-    # prepare anchor to set on affected branches (new child's branch_anchor is parent._id)
     anchor_to_set = parent.get("_id")
     curr = None
 
-    # iterate every child of parent, update descendant branch_anchor where it equals
-    # the child's original anchor. Stop early if we encounter the child that matches new_msg_oid.
     children = parent.get("children_ids") or []
     for cid in children:
-        # normalize child id and fetch document
         try:
             child_key = PyObjectId.parse(cid) if isinstance(cid, str) else cid
-        except Exception:
-            child_key = cid
-        try:
             child_doc = await msgs_col.find_one({"_id": child_key})
         except Exception:
             child_doc = None
         if not child_doc:
             continue
 
-        # remember last processed child (used later to walk the rightmost branch)
         curr = child_doc
-
         original_anchor = child_doc.get("branch_anchor")
-        # DFS over this child's subtree, updating branch_anchor only when it equals original_anchor
         stack = [child_doc]
         while stack:
             node = stack.pop()
-            try:
-                if str(child_doc.get("_id")) == str(new_msg_oid):
-                    break
-            except Exception:
-                # on any comparison error, continue to next child
-                pass
             if not node:
                 continue
-            try:
-                node_anchor = node.get("branch_anchor")
-            except Exception:
-                node_anchor = None
-
+            if str(child_doc.get("_id")) == str(new_msg_oid):
+                break
+            node_anchor = node.get("branch_anchor")
             if node_anchor == original_anchor:
                 try:
                     await msgs_col.update_one(
                         {"_id": node["_id"]},
-                        {"$set": {"branch_anchor": anchor_to_set}}
+                        {"$set": {"branch_anchor": anchor_to_set}},
                     )
                 except Exception:
                     pass
-                # push children to continue traversal
                 for cid2 in node.get("children_ids") or []:
                     try:
-                        child_doc2 = await msgs_col.find_one({"_id": PyObjectId.parse(cid2)})
+                        c2_oid = PyObjectId.parse(cid2) if isinstance(cid2, str) else cid2
+                        child_doc2 = await msgs_col.find_one({"_id": c2_oid})
+                        if child_doc2:
+                            stack.append(child_doc2)
                     except Exception:
-                        child_doc2 = None
-                    if child_doc2:
-                        stack.append(child_doc2)
-            # else: do not descend this branch
+                        pass
 
-        # if this child is the new message, stop processing further siblings
-        
-
-    # 2) Walk the rightmost branch (always the last child) from curr and update cousin_right
     right_curr = curr
     while right_curr:
         try:
             await msgs_col.update_one(
                 {"_id": right_curr["_id"]},
-                {"$set": {"cousin_right": new_msg_oid}}
+                {"$set": {"cousin_right": new_msg_oid}},
             )
         except Exception:
             pass
-
         children = right_curr.get("children_ids") or []
         if not children:
             break
         next_id = children[-1]
         try:
-            right_curr = await msgs_col.find_one({"_id": PyObjectId.parse(next_id)})
+            n_oid = PyObjectId.parse(next_id) if isinstance(next_id, str) else next_id
+            right_curr = await msgs_col.find_one({"_id": n_oid})
         except Exception:
             right_curr = None
 
-async def websocket_handler(websocket, chat_oid, uid, manager):
-    """WebSocket handler inteligente.
 
-    Soporta comandos JSON entrantes con la forma:
-      {"cmd": "send", "text": "...", "parent_id": "<id>"}
-      {"cmd": "fetch_from_top", "id": "<message_id>", "limit": 16}
-      {"cmd": "fetch_from_bottom", "id": "<message_id>", "limit": 16}
-      {"cmd": "get", "id": "<message_id>"}
-      {"cmd": "ping"}
-
-    Responde con envelopes JSON por websocket (usando send_text con json.dumps):
-      {"cmd": "ack", "message": {"_id": "..."}}
-      {"cmd": "history", "history": {...}}
-      {"cmd": "message", "message": {...}}
-      {"cmd": "error", "error": "..."}
-
-    Esta función asume que la autenticación/validación del user y del chat
-    ya fue hecha por el endpoint que llamó a este handler.
+async def websocket_handler(websocket: Any, chat_oid: Any, uid: Any, manager: Any):
     """
-    import json
-
+    Manejador WebSocket para sesión de chat activa.
+    Comandos soportados:
+      - {"cmd": "send", "text": "...", "parent_id": "<id opcional si el chat está vacío>"}
+      - {"cmd": "stop_generation"}
+      - {"cmd": "unlock"}
+      - {"cmd": "fetch_from_top", "id": "<message_id>", "limit": 16, "direction": "left|right"}
+      - {"cmd": "fetch_from_bottom", "id": "<message_id>", "limit": 16}
+      - {"cmd": "get", "id": "<message_id>"}
+      - {"cmd": "ping"}
+      - {"cmd": "close" | "disconnect"}
+    """
     msgs_col = get_message_collection()
     chats_col = get_chat_collection()
 
     def _sanitize_msg_for_out(m: dict) -> dict:
-        """Normaliza un documento de mensaje para salida JSON (ids->str, fechas->ISO)."""
         if not m:
             return {}
-        try:
-            out = dict(m)
-        except Exception:
-            return {"_raw": str(m)}
-        if out.get("_id") is not None:
-            out["_id"] = str(out["_id"])
-        if out.get("parent_id") is not None:
-            try:
-                out["parent_id"] = str(out["parent_id"])
-            except Exception:
-                out["parent_id"] = out.get("parent_id")
+        out = dict(m)
+        for id_field in ("_id", "chat_id", "parent_id", "branch_anchor", "cousin_left", "cousin_right", "sender_id"):
+            if out.get(id_field) is not None:
+                out[id_field] = str(out[id_field])
         if isinstance(out.get("children_ids"), list):
-            out["children_ids"] = [str(c) for c in out.get("children_ids") or []]
-        if out.get("created_at") is not None:
-            try:
-                out["created_at"] = out["created_at"].isoformat()
-            except Exception:
-                try:
-                    out["created_at"] = str(out["created_at"])
-                except Exception:
-                    pass
+            out["children_ids"] = [str(c) for c in out["children_ids"]]
+        if isinstance(out.get("path"), list):
+            out["path"] = [str(p) for p in out["path"]]
+        if out.get("created_at") is not None and hasattr(out["created_at"], "isoformat"):
+            out["created_at"] = out["created_at"].isoformat()
         return out
 
     async def send_error(ws, msg: str):
@@ -303,372 +299,286 @@ async def websocket_handler(websocket, chat_oid, uid, manager):
         except Exception:
             pass
 
-    try:
-        logging.info("websocket_handler: start for chat_oid=%s uid=%s", str(chat_oid), str(uid))
-        while True:
-            data = None
-            idle_timeout = DEFAULT_WS_IDLE_TIMEOUT
+    while True:
+        data = None
+        try:
             try:
-                # try to receive a JSON payload directly, with idle timeout
+                data = await asyncio.wait_for(websocket.receive_json(), timeout=DEFAULT_WS_IDLE_TIMEOUT)
+            except asyncio.TimeoutError:
                 try:
-                    data = await asyncio.wait_for(websocket.receive_json(), timeout=idle_timeout)
-                    logging.debug("websocket_handler: received json payload: %s", data)
-                except asyncio.TimeoutError:
-                    # idle timeout — close connection
-                    logging.info("websocket_handler: idle timeout reached (secs=%s) for chat=%s uid=%s, closing websocket", str(idle_timeout), str(chat_oid), str(uid))
-                    try:
-                        await websocket.send_text(json.dumps({"cmd": "error", "error": "idle_timeout"}, ensure_ascii=False))
-                    except Exception:
-                        pass
-                    try:
-                        await websocket.close()
-                    except Exception:
-                        pass
-                    # ensure manager disconnect if provided
-                    try:
-                        if manager is not None:
-                            manager.disconnect(chat_oid, websocket)
-                    except Exception:
-                        pass
-                    return
-                except Exception:
-                    # receive_json failed (maybe not JSON). Try to get raw text and parse it.
-                    try:
-                        raw = await asyncio.wait_for(websocket.receive_text(), timeout=1)
-                        logging.debug("websocket_handler: received raw text payload: %s", raw)
-                        try:
-                            data = json.loads(raw)
-                        except Exception:
-                            await send_error(websocket, "invalid json payload")
-                            continue
-                    except asyncio.TimeoutError:
-                        await send_error(websocket, "failed to receive payload")
-                        continue
-                    except Exception:
-                        await send_error(websocket, "failed to receive payload")
-                        continue
-            except Exception:
-                await send_error(websocket, "unexpected receive error")
-                continue
-
-            if not isinstance(data, dict):
-                await send_error(websocket, "payload must be a JSON object")
-                continue
-
-            cmd = data.get("cmd")
-
-            # 1) ping
-            if cmd == "ping":
-                logging.debug("websocket_handler: ping received from uid=%s chat=%s", str(uid), str(chat_oid))
-                try:
-                    await websocket.send_text(json.dumps({"cmd": "pong"}, ensure_ascii=False))
-                except Exception:
-                    pass
-                continue
-
-            # 2) send message (behave like POST /messages)
-            if cmd == "send" or cmd == "send_message":
-                text = data.get("text") or data.get("content")
-                parent_id = data.get("parent_id")
-                if not text or not isinstance(text, str):
-                    await send_error(websocket, "text is required")
-                    continue
-
-                # check chat lock atomically: if locked, reject the send
-                try:
-                    # attempt to acquire lock only if not already locked
-                    acquired = await chats_col.find_one_and_update(
-                        {"_id": chat_oid, "locked": False},
-                        {"$set": {"locked": True}}
-                    )
-                    if acquired is None:
-                        await send_error(websocket, "Chat is locked for processing")
-                        continue
-                except Exception:
-                    # if we can't check the lock for any reason, proceed but log
-                    try:
-                        logging.exception("websocket_handler: failed to check/acquire chat lock")
-                    except Exception:
-                        pass
-
-                # resolve parent if provided
-                parent_obj = None
-                if not parent_id:
-                    await send_error(websocket, "parent_id is required")
-                    continue
-                if parent_id:
-                    try:
-                        parent_oid = PyObjectId.parse(parent_id) if isinstance(parent_id, str) else parent_id
-                        parent_obj = await msgs_col.find_one({"_id": parent_oid})
-                    except Exception:
-                        parent_obj = None
-                    if not parent_obj:
-                        await send_error(websocket, "parent_id not found")
-                        continue
-
-                # determine branch anchors/cousins similar to REST flow
-                if parent_obj is None:
-                    branch_anchor = None
-                    cousin_left = None
-                    cousin_right = None
-                else:
-                    if parent_obj.get("children_ids") == []:
-                        branch_anchor = parent_obj.get("branch_anchor")
-                        cousin_left = parent_obj.get("cousin_left")
-                    else:
-                        branch_anchor = parent_obj.get("_id")
-                        cousin_left = parent_obj.get("children_ids")[-1] if parent_obj.get("children_ids") else None
-                    cousin_right = parent_obj.get("cousin_right")
-
-                now = datetime.utcnow()
-                user_msg = {
-                    "_id": PyObjectId.new(),
-                    "chat_id": chat_oid,
-                    "parent_id": parent_obj.get("_id") if parent_obj else None,
-                    "children_ids": [],
-                    "path": list(parent_obj.get("path", [])) + [parent_obj.get("_id")] if parent_obj else [],
-                    "branch_anchor": branch_anchor,
-                    "cousin_left": cousin_left,
-                    "cousin_right": cousin_right,
-                    "sender_id": PyObjectId.parse(uid) if isinstance(uid, str) else uid,
-                    "role": "user",
-                    "content": text,
-                    "content_type": "text",
-                    "status": "queued",
-                    "tokens_used": None,
-                    "created_at": now,
-                }
-
-                try:
-                    # reuse existing service to insert and broadcast
-                    logging.info("websocket_handler: processing send command uid=%s chat=%s parent_id=%s text_preview=%s",
-                                 str(uid), str(chat_oid), str(parent_id), (text or '')[:120])
-                    msg_id = await process_user_message(chat_oid, user_msg, manager=manager)
-                    logging.info("websocket_handler: processed send command uid=%s chat=%s result=%s", str(uid), str(chat_oid), str(getattr(msg_id, '_id', msg_id)))
-                    # process_user_message returns the original message object in current implementation
-                    # ack/broadcast is handled by send_message via the manager; do not send here
-                except Exception as e:
-                    logging.exception("websocket_handler: failed to process send command")
-                    await send_error(websocket, str(e))
-                continue
-
-            # 2b) client-requested close/disconnect
-            if cmd in ("close", "disconnect"):
-                logging.info("websocket_handler: close requested by uid=%s chat=%s", str(uid), str(chat_oid))
-                try:
-                    # notify client we're closing
-                    await websocket.send_text(json.dumps({"cmd": "closing", "reason": "client_requested"}, ensure_ascii=False))
-                except Exception:
-                    pass
-                # ensure we remove from manager and then close
-                try:
-                    if manager is not None:
-                        manager.disconnect(chat_oid, websocket)
-                except Exception:
-                    logging.exception("websocket_handler: error while disconnecting before close for chat=%s uid=%s", str(chat_oid), str(uid))
-                try:
+                    await websocket.send_text(json.dumps({"cmd": "error", "error": "idle_timeout"}, ensure_ascii=False))
                     await websocket.close()
                 except Exception:
-                    logging.exception("websocket_handler: error while closing websocket after client-requested close for chat=%s uid=%s", str(chat_oid), str(uid))
+                    pass
+                if manager is not None:
+                    manager.disconnect(chat_oid, websocket)
                 return
-
-            # 3) fetch history from top (use build_history_from_message_top)
-            if cmd == "fetch_from_top":
-                mid = data.get("id")
-                limit = int(data.get("limit") or 16)
-                direction = data.get("direction") or RIGHT
-                logging.info("websocket_handler: fetch_from_top requested id=%s limit=%s direction=%s by uid=%s", str(mid), limit, direction, str(uid))
-                if not mid:
-                    await send_error(websocket, "id is required")
-                    continue
+            except RuntimeError:
+                # Socket cerrado por el cliente
+                return
+            except Exception as exc:
+                if "disconnect" in str(exc).lower() or "closed" in str(exc).lower():
+                    return
                 try:
-                    # call the existing function (it expects id object or string)
-                    hist = await build_history_from_message_top(mid, limit=limit, direction=direction)
-                    env = {"cmd": "history", "history": hist}
-                    await websocket.send_text(json.dumps(env, default=str, ensure_ascii=False))
-                except Exception as e:
-                    logging.exception("websocket_handler: fetch_from_top failed")
-                    await send_error(websocket, str(e))
-                continue
-
-            # 4) fetch history from bottom (ancestors)
-            if cmd == "fetch_from_bottom":
-                mid = data.get("id")
-                limit = int(data.get("limit") or 16)
-                logging.info("websocket_handler: fetch_from_bottom requested id=%s limit=%s by uid=%s", str(mid), limit, str(uid))
-                if not mid:
-                    await send_error(websocket, "id is required")
-                    continue
-                try:
-                    hist = await build_history_from_message_bottom(mid, limit=limit)
-                    env = {"cmd": "history", "history": hist}
-                    await websocket.send_text(json.dumps(env, default=str, ensure_ascii=False))
-                except Exception as e:
-                    logging.exception("websocket_handler: fetch_from_bottom failed")
-                    await send_error(websocket, str(e))
-                continue
-
-            # 5) get a single message
-            if cmd == "get":
-                mid = data.get("id")
-                logging.info("websocket_handler: get requested id=%s by uid=%s", str(mid), str(uid))
-                if not mid:
-                    await send_error(websocket, "id is required")
-                    continue
-                try:
-                    doc = await msgs_col.find_one({"_id": PyObjectId.parse(mid)})
-                    if not doc:
-                        await send_error(websocket, "message not found")
-                        continue
-                    out = _sanitize_msg_for_out(doc)
-                    env = {"cmd": "message", "message": out}
-                    await websocket.send_text(json.dumps(env, default=str, ensure_ascii=False))
+                    raw = await asyncio.wait_for(websocket.receive_text(), timeout=1)
+                    data = json.loads(raw)
                 except Exception:
-                    logging.exception("websocket_handler: get failed")
-                    await send_error(websocket, "failed to get message")
+                    return
+        except Exception:
+            return
+
+        if not isinstance(data, dict):
+            await send_error(websocket, "payload must be a JSON object")
+            continue
+
+        cmd = data.get("cmd")
+
+        if cmd == "ping":
+            try:
+                await websocket.send_text(json.dumps({"cmd": "pong"}, ensure_ascii=False))
+            except Exception:
+                pass
+            continue
+
+        if cmd == "stop_generation":
+            chat_key = str(chat_oid)
+            running_task = ACTIVE_GENERATION_TASKS.get(chat_key)
+            if running_task and not running_task.done():
+                running_task.cancel()
+            else:
+                await release_chat_lock(chat_oid, manager=manager)
+            continue
+
+        if cmd == "unlock":
+            await release_chat_lock(chat_oid, manager=manager)
+            continue
+
+        if cmd == "tool_approval":
+            approval_id = str(data.get("approval_id") or "")
+            approved = bool(data.get("approved", True))
+            feedback = str(data.get("feedback") or "")
+            if approval_id:
+                node_bridge.resolve_tool_approval(str(chat_oid), approval_id, approved, feedback)
+                if manager is not None:
+                    await manager.broadcast(
+                        str(chat_oid),
+                        {
+                            "cmd": "agent_tool_approval_resolved",
+                            "message": {
+                                "approval_id": approval_id,
+                                "chat_id": str(chat_oid),
+                                "approved": approved,
+                                "feedback": feedback,
+                            },
+                        },
+                    )
+            continue
+
+        if cmd in ("send", "send_message"):
+            text = data.get("text") or data.get("content")
+            parent_id = data.get("parent_id")
+            if not text or not isinstance(text, str):
+                await send_error(websocket, "text is required")
                 continue
 
-            # unknown command
-            logging.warning("websocket_handler: unknown cmd received: %s from uid=%s", str(cmd), str(uid))
-            await send_error(websocket, f"unknown cmd: {cmd}")
+            # HU-03: Validar parent_id ANTES de adquirir el lock para jamás dejar el chat bloqueado en caso de error
+            parent_obj = None
+            if parent_id:
+                try:
+                    parent_oid = PyObjectId.parse(parent_id) if isinstance(parent_id, str) else parent_id
+                    parent_obj = await msgs_col.find_one({"_id": parent_oid, "chat_id": chat_oid})
+                except Exception:
+                    parent_obj = None
+                if not parent_obj:
+                    await send_error(websocket, "parent_id not found")
+                    continue
+                # Si por error se apuntó a un mensaje de rol 'user', subir al padre ('agent' o raíz None)
+                # para que jamás quede un mensaje de usuario como hijo directo de otro mensaje de usuario
+                if parent_obj.get("role") == "user":
+                    upper_parent_id = parent_obj.get("parent_id")
+                    if upper_parent_id:
+                        parent_obj = await msgs_col.find_one({"_id": upper_parent_id, "chat_id": chat_oid})
+                    else:
+                        parent_obj = None
 
-    except Exception:
-        logging.exception("Error in websocket_handler")
-        raise
+            # Comprobar lock con TTL de 120s
+            chat_doc = await chats_col.find_one({"_id": chat_oid})
+            if is_chat_currently_locked(chat_doc):
+                await send_error(websocket, "Chat is locked for processing")
+                continue
 
-async def build_history_from_message_top(first_msg_id, limit=16, direction=RIGHT):
-    """Build a message history tree centered around first_msg_id.
+            if parent_obj is None:
+                branch_anchor = None
+                cousin_left = None
+                cousin_right = None
+                msg_path = []
+            else:
+                if not parent_obj.get("children_ids"):
+                    branch_anchor = parent_obj.get("branch_anchor")
+                    cousin_left = parent_obj.get("cousin_left")
+                else:
+                    branch_anchor = parent_obj.get("_id")
+                    cousin_left = parent_obj["children_ids"][-1]
+                cousin_right = parent_obj.get("cousin_right")
+                msg_path = list(parent_obj.get("path", [])) + [parent_obj.get("_id")]
 
-    Args:
-        first_msg_id (str): The ID of the first message.
-        limit (int): The maximum number of messages to retrieve.
-        direction (tuple): The direction to build the history (LEFT, RIGHT).
+            user_msg = {
+                "_id": PyObjectId.new(),
+                "chat_id": chat_oid,
+                "parent_id": parent_obj.get("_id") if parent_obj else None,
+                "children_ids": [],
+                "path": msg_path,
+                "branch_anchor": branch_anchor,
+                "cousin_left": cousin_left,
+                "cousin_right": cousin_right,
+                "sender_id": str(uid),
+                "role": "user",
+                "content": text,
+                "content_type": "text",
+                "status": "done",
+                "tokens_used": None,
+                "created_at": datetime.utcnow(),
+            }
 
-    Returns:
-        dict: A dictionary containing the message history.
-    """
+            try:
+                await process_user_message(chat_oid, user_msg, manager=manager)
+            except Exception as e:
+                logger.exception("websocket_handler: error procesando mensaje")
+                await release_chat_lock(chat_oid, manager=manager)
+                await send_error(websocket, str(e))
+            continue
+
+        if cmd in ("close", "disconnect"):
+            try:
+                await websocket.send_text(json.dumps({"cmd": "closing", "reason": "client_requested"}, ensure_ascii=False))
+            except Exception:
+                pass
+            if manager is not None:
+                manager.disconnect(chat_oid, websocket)
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+            return
+
+        if cmd == "fetch_from_top":
+            mid = data.get("id")
+            limit = int(data.get("limit") or 16)
+            direction = data.get("direction") or RIGHT
+            if not mid:
+                await send_error(websocket, "id is required")
+                continue
+            try:
+                hist = await build_history_from_message_top(mid, limit=limit, direction=direction)
+                await websocket.send_text(json.dumps({"cmd": "history", "history": hist}, default=str, ensure_ascii=False))
+            except Exception as e:
+                await send_error(websocket, str(e))
+            continue
+
+        if cmd == "fetch_from_bottom":
+            mid = data.get("id")
+            limit = int(data.get("limit") or 16)
+            if not mid:
+                await send_error(websocket, "id is required")
+                continue
+            try:
+                hist = await build_history_from_message_bottom(mid, limit=limit)
+                await websocket.send_text(json.dumps({"cmd": "history", "history": hist}, default=str, ensure_ascii=False))
+            except Exception as e:
+                await send_error(websocket, str(e))
+            continue
+
+        if cmd == "get":
+            mid = data.get("id")
+            if not mid:
+                await send_error(websocket, "id is required")
+                continue
+            try:
+                doc = await msgs_col.find_one({"_id": PyObjectId.parse(mid)})
+                if not doc:
+                    await send_error(websocket, "message not found")
+                    continue
+                out = _sanitize_msg_for_out(doc)
+                await websocket.send_text(json.dumps({"cmd": "message", "message": out}, default=str, ensure_ascii=False))
+            except Exception:
+                await send_error(websocket, "failed to get message")
+            continue
+
+        await send_error(websocket, f"unknown cmd: {cmd}")
+
+
+def _parse_msg_node(m: Dict[str, Any]) -> Dict[str, Any]:
+    parsed = dict(m)
+    for id_field in ("_id", "chat_id", "parent_id", "branch_anchor", "cousin_left", "cousin_right", "sender_id"):
+        if parsed.get(id_field) is not None:
+            parsed[id_field] = str(parsed[id_field])
+    if isinstance(parsed.get("children_ids"), list):
+        parsed["children_ids"] = [str(c) for c in parsed["children_ids"]]
+    if isinstance(parsed.get("path"), list):
+        parsed["path"] = [str(p) for p in parsed["path"]]
+    ca = parsed.get("created_at")
+    if ca and hasattr(ca, "isoformat"):
+        parsed["created_at"] = ca.isoformat()
+    return parsed
+
+
+async def build_history_from_message_top(first_msg_id: Any, limit: int = 16, direction: str = RIGHT) -> Dict[str, Any]:
     msgs_col = get_message_collection()
-
-    # normalize id if a string was provided
     try:
         key = PyObjectId.parse(first_msg_id) if isinstance(first_msg_id, str) else first_msg_id
     except Exception:
         key = first_msg_id
 
-    # Fetch the target message
     target_msg = await msgs_col.find_one({"_id": key})
     if not target_msg:
         raise ValueError("Message not found")
 
-    # Build ancestors
     descendents = []
     current = target_msg
     for _ in range(limit):
-        if not current:
+        if not current or not current.get("children_ids"):
             break
-        if not current.get("children_ids") or len(current.get("children_ids")) == 0:
-            break
-        if direction == LEFT:
-            child_id = current["children_ids"][0]
-        else:
-            child_id = current["children_ids"][-1]
+        child_id = current["children_ids"][0] if direction == LEFT else current["children_ids"][-1]
         try:
-            # normalize child id
-            try:
-                child_key = PyObjectId.parse(child_id) if isinstance(child_id, str) else child_id
-            except Exception:
-                child_key = child_id
+            child_key = PyObjectId.parse(child_id) if isinstance(child_id, str) else child_id
             child = await msgs_col.find_one({"_id": child_key})
+            if not child:
+                break
             descendents.append(child)
             current = child
         except Exception:
             break
 
-    # Build the "tree" as a list of parsed messages (ids as strings, datetimes iso)
-    def _parse_msg(m):
-        parsed = dict(m)
-        # Normalize id fields to strings where present
-        if parsed.get("_id") is not None:
-            parsed["_id"] = str(parsed["_id"])
-        if parsed.get("parent_id") is not None:
-            parsed["parent_id"] = str(parsed["parent_id"])
-        # children_ids may be stored as ObjectIds; convert to strings
-        if isinstance(parsed.get("children_ids"), list):
-            parsed["children_ids"] = [str(c) for c in parsed["children_ids"]]
-        # created_at -> isoformat if datetime-like
-        ca = parsed.get("created_at")
-        if ca and hasattr(ca, "isoformat"):
-            try:
-                parsed["created_at"] = ca.isoformat()
-            except Exception:
-                pass
-        return parsed
-
     chain = [target_msg] + descendents
-    res = [_parse_msg(m) for m in chain]
+    return {"Result": [_parse_msg_node(m) for m in chain]}
 
-    return {"Result": res}
 
-async def build_history_from_message_bottom(last_msg_id, limit=16):
-    """Build a message history tree centered around last_msg_id.
-
-    This function retrieves messages from the database to construct a
-    structure of messages, including ancestors up to ancestor_limit levels.
-    The total number of nodes is capped at max_nodes.
-
-    Returns a dict with 'tree' and 'recent' keys.
-    """
+async def build_history_from_message_bottom(last_msg_id: Any, limit: int = 16) -> Dict[str, Any]:
     msgs_col = get_message_collection()
-
-    # normalize id if a string was provided
     try:
         key = PyObjectId.parse(last_msg_id) if isinstance(last_msg_id, str) else last_msg_id
     except Exception:
         key = last_msg_id
 
-    # Fetch the target message
     target_msg = await msgs_col.find_one({"_id": key})
     if not target_msg:
         raise ValueError("Message not found")
 
-    # Build ancestors
     ancestors = []
     current = target_msg
     for _ in range(limit):
         if not current.get("parent_id"):
             break
         try:
-            parent_key = PyObjectId.parse(current.get("parent_id")) if isinstance(current.get("parent_id"), str) else current.get("parent_id")
+            parent_key = PyObjectId.parse(current["parent_id"]) if isinstance(current["parent_id"], str) else current["parent_id"]
+            parent = await msgs_col.find_one({"_id": parent_key})
         except Exception:
-            parent_key = current.get("parent_id")
-        parent = await msgs_col.find_one({"_id": parent_key})
+            parent = None
         if not parent:
             break
         ancestors.append(parent)
         current = parent
     ancestors.reverse()
 
-    # Build the "tree" as a list of parsed messages (ids as strings, datetimes iso)
-    def _parse_msg(m):
-        parsed = dict(m)
-        # Normalize id fields to strings where present
-        if parsed.get("_id") is not None:
-            parsed["_id"] = str(parsed["_id"])
-        if parsed.get("parent_id") is not None:
-            parsed["parent_id"] = str(parsed["parent_id"])
-        # children_ids may be stored as ObjectIds; convert to strings
-        if isinstance(parsed.get("children_ids"), list):
-            parsed["children_ids"] = [str(c) for c in parsed["children_ids"]]
-        # created_at -> isoformat if datetime-like
-        ca = parsed.get("created_at")
-        if ca and hasattr(ca, "isoformat"):
-            try:
-                parsed["created_at"] = ca.isoformat()
-            except Exception:
-                pass
-        return parsed
-
     chain = ancestors + [target_msg]
-    res = [_parse_msg(m) for m in chain]
-
-    return {"Result": res}
+    return {"Result": [_parse_msg_node(m) for m in chain]}
