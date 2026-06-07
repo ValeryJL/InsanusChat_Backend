@@ -1,45 +1,62 @@
-from typing import Any, Dict, Optional, Union
+"""
+Validación, normalización y protección Anti-SSRF para servidores MCP (HU-07, HU-10).
+"""
+import ipaddress
 import os
-from datetime import datetime
+import socket
+from typing import Any, Dict, Optional, Union
+from urllib.parse import urlparse
 
 from pydantic import ValidationError
-
 from models import MCPEntryModel
+
+BLOCKED_METADATA_IPS = {"169.254.169.254", "100.100.100.200", "fd00:ec2::254"}
+
+
+def validate_endpoint_url(endpoint: str, allow_local: bool = True) -> str:
+    """
+    Valida que un endpoint HTTP/SSE/WS de MCP tenga un esquema válido y
+    protege contra ataques SSRF a endpoints de metadata cloud o redes internas.
+    """
+    if not endpoint or not isinstance(endpoint, str):
+        raise ValueError("El endpoint del servidor MCP es requerido")
+
+    parsed = urlparse(endpoint.strip())
+    if parsed.scheme not in ("http", "https", "ws", "wss"):
+        raise ValueError(f"Esquema de URL no soportado en endpoint MCP: {parsed.scheme}")
+
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        raise ValueError("El endpoint MCP debe incluir un hostname válido")
+
+    if hostname in BLOCKED_METADATA_IPS or hostname.endswith(".internal"):
+        raise ValueError("Endpoint bloqueado por política de seguridad Anti-SSRF (Cloud Metadata)")
+
+    # Verificar si es IP literal o resuelve a IP privada/loopback
+    try:
+        ip_obj = ipaddress.ip_address(hostname)
+        if str(ip_obj) in BLOCKED_METADATA_IPS or ip_obj.is_link_local:
+            raise ValueError("Endpoint bloqueado por política Anti-SSRF (Link-Local / Metadata)")
+        if not allow_local and (ip_obj.is_loopback or ip_obj.is_private):
+            raise ValueError("Endpoints MCP hacia redes locales/privadas están deshabilitados por el administrador")
+    except ValueError as ve:
+        if "Anti-SSRF" in str(ve) or "deshabilitados" in str(ve):
+            raise
+        # No es una IP literal, es un dominio
+        if not allow_local and hostname in ("localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"):
+            raise ValueError("Endpoints MCP hacia localhost están deshabilitados por el administrador")
+
+    return endpoint.strip()
 
 
 def validate_mcp_entry(data: Union[Dict[str, Any], MCPEntryModel]) -> MCPEntryModel:
-    """Validate and normalize an MCP entry.
-
-    Accepts a dict or MCPEntryModel and returns a validated MCPEntryModel instance.
-    Raises ValueError/ValidationError on invalid data.
-    """
     if isinstance(data, MCPEntryModel):
         return data
-
-    try:
-        # pydantic v2 API
-        m = MCPEntryModel.model_validate(data)
-    except AttributeError:
-        # fallback for older pydantic versions
-        try:
-            m = MCPEntryModel.parse_obj(data)
-        except Exception as e:
-            raise ValidationError(e)
-    return m
+    return MCPEntryModel.model_validate(data)
 
 
-def build_connect_params(mcp_entry: Union[Dict[str, Any], MCPEntryModel]) -> Dict[str, Optional[object]]:
-    """Build parameters suitable for MCPClient.connect_to_server.
-
-    Returns a dict with keys:
-      - server_script_path: str (may be empty when command+args are provided)
-      - command: Optional[str]
-      - args: Optional[list]
-      - env: Optional[dict]
-      - workdir: Optional[str]
-
-    Raises ValueError when required fields for the chosen transport are missing.
-    """
+def build_connect_params(mcp_entry: Union[Dict[str, Any], MCPEntryModel], allow_local: bool = True) -> Dict[str, Any]:
+    """Construye los parámetros de conexión para MCPClient.connect_to_server."""
     m = validate_mcp_entry(mcp_entry)
 
     command = None
@@ -47,43 +64,32 @@ def build_connect_params(mcp_entry: Union[Dict[str, Any], MCPEntryModel]) -> Dic
     env = dict(m.env or {})
     workdir = m.working_dir
 
-    if m.transport == 'stdio':
-        # Prefer local_script_path when available (allow connect_to_server to infer command)
+    if m.transport == "stdio":
         if m.local_script_path:
             server_script_path = m.local_script_path
-            # If command was explicitly provided, pass it through (useful to override inference)
             command = m.command
             args = m.args or None
         elif m.command:
-            # No local script -> require explicit command+args
             server_script_path = ""
             command = m.command
             args = m.args or []
+        elif m.endpoint and (m.endpoint.endswith(".py") or m.endpoint.endswith(".js")):
+            # Fallback amigable si el usuario puso la ruta del script en 'endpoint'
+            server_script_path = m.endpoint
+            command = m.command
+            args = m.args or None
         else:
-            raise ValueError("MCPEntry transport 'stdio' requires 'local_script_path' or explicit 'command' + 'args'")
+            raise ValueError("El transporte 'stdio' requiere 'local_script_path' o 'command' + 'args'")
 
-    elif m.transport in ('http', 'sse', 'websocket'):
+    elif m.transport in ("http", "sse", "websocket"):
         if not m.endpoint:
-            raise ValueError(f"MCPEntry transport '{m.transport}' requires an 'endpoint' field")
-        # For network transports we pass endpoint as server_script_path so higher-level
-        # callers can decide how to handle it. MCPClient.connect_to_server in this
-        # repo currently expects a local script path or command; callers should
-        # implement a different transport handler for network transports.
+            raise ValueError(f"El transporte '{m.transport}' requiere un campo 'endpoint' con la URL")
+        validate_endpoint_url(m.endpoint, allow_local=allow_local)
         server_script_path = m.endpoint
         command = None
         args = None
     else:
-        raise ValueError(f"Unsupported transport: {m.transport}")
-
-    # Basic sanity checks
-    if server_script_path and m.transport == 'stdio' and m.local_script_path:
-        # If a local path was given, optionally check existence and warn (do not raise by default)
-        try:
-            if not os.path.exists(m.local_script_path):
-                # keep behavior non-fatal here; caller may run in different environment
-                pass
-        except Exception:
-            pass
+        raise ValueError(f"Transporte MCP no soportado: {m.transport}")
 
     return {
         "server_script_path": server_script_path,
@@ -93,21 +99,8 @@ def build_connect_params(mcp_entry: Union[Dict[str, Any], MCPEntryModel]) -> Dic
         "workdir": workdir,
         "timeout_seconds": m.timeout_seconds,
         "transport": m.transport,
+        "endpoint": m.endpoint,
         "ssl": m.ssl,
         "status": m.status,
         "last_connected_at": m.last_connected_at,
-    }
-
-
-def build_connect_and_run_params(mcp_entry: Union[Dict[str, Any], MCPEntryModel]) -> Dict[str, Any]:
-    """Convenience wrapper returning only the subset commonly passed to connect_to_server.
-
-    Returns: { 'server_script_path', 'command', 'args', 'env' }
-    """
-    params = build_connect_params(mcp_entry)
-    return {
-        "server_script_path": params.get("server_script_path"),
-        "command": params.get("command"),
-        "args": params.get("args"),
-        "env": params.get("env"),
     }
