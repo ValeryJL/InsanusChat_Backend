@@ -138,7 +138,7 @@ NON_CHAT_KEYWORDS = (
     "image-",
     "imagen",
     "transcribe",
-    
+    "nano-banana",
     "lyria",
     "omni",
     "veo",
