@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 
 import database
-from routers import admin, agents, apikeys, auth, chats, tools
+from routers import admin, agents, apikeys, auth, chats, nodes, tools
 
 load_dotenv()
 
