@@ -212,4 +212,109 @@ async def test_full_platform_e2e_flow():
         r_del_chat = await client.delete(f"/api/v1/chats/{chat_id}", headers=headers)
         assert r_del_chat.status_code == 200
         assert r_del_chat.json()["data"]["deleted_messages"] == 3
+
+        # 9. Equipos de Ejecución (Agent Harness), Privacidad Local, Editor VS Code y Unified Diffs (HU-20 a HU-27)
+        r_nodes = await client.get("/api/v1/nodes/", headers=headers)
+        assert r_nodes.status_code == 200
+        nodes_list = r_nodes.json()["data"]["nodes"]
+        assert len(nodes_list) >= 1
+        local_node = nodes_list[0]
+        node_id = local_node["node_id"]
+
+        # Crear proyecto de prueba en el nodo
+        test_ws_name = f"harness_proj_{unique_suffix}"
+        r_create_ws = await client.post(
+            f"/api/v1/nodes/{node_id}/workspaces",
+            headers=headers,
+            json={"name": test_ws_name, "description": "Proyecto de prueba E2E del Harness"},
+        )
+        assert r_create_ws.status_code == 200
+        assert r_create_ws.json()["data"]["name"] == test_ws_name
+
+        # Escribir archivo desde Editor VS Code (HU-27)
+        r_write = await client.post(
+            f"/api/v1/nodes/{node_id}/files/write",
+            headers=headers,
+            json={
+                "workspace": test_ws_name,
+                "path": "src/main.py",
+                "content": "def greet():\n    return 'Hola Mundo'\n",
+            },
+        )
+        assert r_write.status_code == 200
+        assert "+def greet():" in r_write.json()["data"]["diff"]
+
+        # Editar quirúrgicamente archivo con Unified Diff (HU-25)
+        r_edit = await client.post(
+            f"/api/v1/nodes/{node_id}/files/edit",
+            headers=headers,
+            json={
+                "workspace": test_ws_name,
+                "path": "src/main.py",
+                "target": "return 'Hola Mundo'",
+                "replacement": "return 'Hola InsanusChat Harness'",
+            },
+        )
+        assert r_edit.status_code == 200
+        edit_diff = r_edit.json()["data"]["diff"]
+        assert "-    return 'Hola Mundo'" in edit_diff
+        assert "+    return 'Hola InsanusChat Harness'" in edit_diff
+
+        # Leer archivo y árbol para el Editor VS Code (HU-27)
+        r_read = await client.get(
+            f"/api/v1/nodes/{node_id}/files/read",
+            headers=headers,
+            params={"workspace": test_ws_name, "path": "src/main.py"},
+        )
+        assert r_read.status_code == 200
+        assert "Hola InsanusChat Harness" in r_read.json()["data"]["content"]
+
+        r_tree = await client.get(
+            f"/api/v1/nodes/{node_id}/files/tree",
+            headers=headers,
+            params={"workspace": test_ws_name},
+        )
+        assert r_tree.status_code == 200
+        assert len(r_tree.json()["data"]["tree"]) >= 1
+
+        # Verificar Switch de Privacidad '🔒 Solo Local' (expose_to_cloud=False bloquea acceso remoto con 403) (HU-24)
+        r_priv_off = await client.patch(
+            "/api/v1/nodes/local/privacy",
+            headers=headers,
+            json={"expose_to_cloud": False},
+        )
+        assert r_priv_off.status_code == 200
+        assert r_priv_off.json()["data"]["expose_to_cloud"] is False
+
+        r_blocked = await client.get(
+            f"/api/v1/nodes/{node_id}/files/tree",
+            headers=headers,
+            params={"workspace": test_ws_name},
+        )
+        assert r_blocked.status_code == 403
+
+        # Reactivar exposición y verificar Terminal Remota Segura + Guardrail contra comandos destructivos (HU-26)
+        r_priv_on = await client.patch(
+            "/api/v1/nodes/local/privacy",
+            headers=headers,
+            json={"expose_to_cloud": True, "allow_remote_terminal": True},
+        )
+        assert r_priv_on.status_code == 200
+        assert r_priv_on.json()["data"]["expose_to_cloud"] is True
+
+        r_term = await client.post(
+            f"/api/v1/nodes/{node_id}/terminal/exec",
+            headers=headers,
+            json={"workspace": test_ws_name, "command": "python -c \"print(21 * 2)\""},
+        )
+        assert r_term.status_code == 200
+        assert "42" in r_term.json()["data"]["stdout"]
+
+        # Verificar bloqueo de comando destructivo en Terminal Remota Segura
+        r_term_danger = await client.post(
+            f"/api/v1/nodes/{node_id}/terminal/exec",
+            headers=headers,
+            json={"workspace": test_ws_name, "command": "rm -rf /"},
+        )
+        assert r_term_danger.status_code == 403
     await database.close_mongo_connection()
