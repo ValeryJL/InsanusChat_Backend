@@ -607,7 +607,7 @@ class NodeBridgeManager:
         self.local_executor = LocalWorkspaceExecutor()
         self.local_node_id = "local-workstation-host"
         self.local_node_name = os.environ.get("LOCAL_NODE_NAME", f"Docker-Sandbox-{platform.node() or 'Server'}")
-        self.enable_builtin_host_node = True
+        self.enable_builtin_host_node = os.environ.get("ENABLE_BUILTIN_HOST_NODE", "true").lower() not in ("0", "false", "no")
         # Conexiones WebSocket de Workstations externas (Host PCs reales): node_id -> {ws, user_id, info, pending, pty_sessions}
         self.remote_nodes: Dict[str, Dict[str, Any]] = {}
         # Aprobaciones Human-in-the-Loop pendientes por chat_id -> call_id -> {future, info}
