@@ -289,3 +289,49 @@ class MCPResponse(ResponseModel):
 
 
 # -------------------------------------------------
+# Modelos SSOT de Dispositivos Workstation (Épica 9: HU-33, HU-34, HU-35)
+# -------------------------------------------------
+class WorkstationPolicyModel(BaseModel):
+    expose_to_cloud: bool = False
+    allow_remote_terminal: bool = True
+    allow_remote_agent_tools: bool = True
+    default_harness_mode: Literal["ask", "auto_edit", "autopilot"] = "ask"
+    allowed_workspaces: Optional[List[str]] = None
+    terminal_auto_approve_patterns: List[str] = Field(
+        default_factory=lambda: ["git status", "git diff", "pytest", "npm test"]
+    )
+    terminal_blocked_patterns: List[str] = Field(default_factory=list)
+    preferred_editor: str = "auto"
+    custom_editor_path: Optional[str] = None
+    sync_cli_extensions: bool = True
+    default_shell: str = "auto"
+    config_version: int = 1
+
+
+class WorkstationRegisterRequest(BaseModel):
+    node_id: str = Field(..., min_length=3, max_length=120)
+    name: str = Field(..., min_length=1, max_length=120)
+    os: str = Field("windows")
+    arch: str = Field("x86_64")
+    shell: str = Field("powershell")
+    app_version: str = Field("1.4.0")
+    root_dir: str = Field("")
+    workspaces: List[Dict[str, Any]] = Field(default_factory=list)
+    reported_editors: List[Dict[str, Any]] = Field(default_factory=list)
+    local_policy: Optional[Dict[str, Any]] = None
+
+
+class WorkstationPolicyPatchRequest(BaseModel):
+    expose_to_cloud: Optional[bool] = None
+    allow_remote_terminal: Optional[bool] = None
+    allow_remote_agent_tools: Optional[bool] = None
+    default_harness_mode: Optional[Literal["ask", "auto_edit", "autopilot"]] = None
+    allowed_workspaces: Optional[List[str]] = None
+    terminal_auto_approve_patterns: Optional[List[str]] = None
+    terminal_blocked_patterns: Optional[List[str]] = None
+    preferred_editor: Optional[str] = None
+    custom_editor_path: Optional[str] = None
+    sync_cli_extensions: Optional[bool] = None
+    default_shell: Optional[str] = None
+    node_name: Optional[str] = None
+    from_device: bool = False
