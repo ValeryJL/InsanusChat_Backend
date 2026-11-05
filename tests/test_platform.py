@@ -317,4 +317,79 @@ async def test_full_platform_e2e_flow():
             json={"workspace": test_ws_name, "command": "rm -rf /"},
         )
         assert r_term_danger.status_code == 403
+
+        # 10. Épica 9 (HU-33, HU-34, HU-35): Registro SSOT de Workstations, Políticas Versionadas y Regla de Seguridad Física
+        desktop_id = f"ws-desktop-{unique_suffix}"
+        r_dev_reg = await client.post(
+            "/api/v1/nodes/register-device",
+            headers=headers,
+            json={
+                "node_id": desktop_id,
+                "name": "PC-Valeria-Win",
+                "os": "windows",
+                "arch": "x86_64",
+                "shell": "powershell",
+                "app_version": "1.4.0",
+                "root_dir": "C:/Proyectos",
+                "workspaces": [{"name": "InsanusChat", "path": "InsanusChat", "is_git": True}],
+                "reported_editors": [{"id": "code", "name": "Visual Studio Code", "path": "code.cmd"}],
+            },
+        )
+        assert r_dev_reg.status_code == 200
+        dev_data = r_dev_reg.json()["data"]
+        assert dev_data["node_id"] == desktop_id
+        assert dev_data["status"] == "private_local_only"
+        assert dev_data["desired_policy"]["expose_to_cloud"] is False
+        assert dev_data["config_version"] == 1
+
+        # Seguridad física: NO se puede encender Control Remoto desde la Web si el equipo está aislado (403)
+        r_force_remote = await client.patch(
+            f"/api/v1/nodes/{desktop_id}/policy",
+            headers=headers,
+            json={"expose_to_cloud": True},
+        )
+        assert r_force_remote.status_code == 403
+
+        # Desde la app Desktop (X-Workstation-Origin: desktop) SÍ se puede actualizar y sube config_version
+        r_desktop_policy = await client.patch(
+            f"/api/v1/nodes/{desktop_id}/policy",
+            headers={**headers, "X-Workstation-Origin": "desktop"},
+            json={
+                "expose_to_cloud": True,
+                "allow_remote_terminal": True,
+                "allow_remote_agent_tools": False,
+                "default_harness_mode": "auto_edit",
+                "preferred_editor": "code",
+            },
+        )
+        assert r_desktop_policy.status_code == 200
+        pol_data = r_desktop_policy.json()["data"]
+        assert pol_data["config_version"] == 2
+        assert pol_data["desired_policy"]["allow_remote_agent_tools"] is False
+        assert pol_data["desired_policy"]["default_harness_mode"] == "auto_edit"
+
+        # Consultar estado de sincronización autoritativo (GET /{node_id}/sync)
+        r_sync = await client.get(f"/api/v1/nodes/{desktop_id}/sync", headers=headers)
+        assert r_sync.status_code == 200
+        assert r_sync.json()["data"]["config_version"] == 2
+
+        # Kill-Switch remoto desde Web/Móvil (expose_to_cloud=False SÍ permitido remotamente)
+        r_kill = await client.patch(
+            f"/api/v1/nodes/{desktop_id}/policy",
+            headers=headers,
+            json={"expose_to_cloud": False},
+        )
+        assert r_kill.status_code == 200
+        assert r_kill.json()["data"]["desired_policy"]["expose_to_cloud"] is False
+        assert r_kill.json()["data"]["config_version"] == 3
+
+        # Revocación completa del dispositivo
+        r_revoke = await client.delete(f"/api/v1/nodes/{desktop_id}", headers=headers)
+        assert r_revoke.status_code == 200
+        assert r_revoke.json()["data"]["revoked"] is True
+
+        # El dispositivo revocado ya no aparece en GET /api/v1/nodes/
+        r_nodes_after = await client.get("/api/v1/nodes/", headers=headers)
+        assert all(n["node_id"] != desktop_id for n in r_nodes_after.json()["data"]["nodes"])
+
     await database.close_mongo_connection()
