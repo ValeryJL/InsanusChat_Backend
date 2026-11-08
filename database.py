@@ -172,3 +172,9 @@ def get_settings_collection():
     if db is None:
         raise DatabaseNotInitializedError("Database client is not initialized")
     return db[COLLECTION_SETTINGS]
+
+
+def get_workstation_collection():
+    if db is None:
+        raise DatabaseNotInitializedError("Database client is not initialized")
+    return db[COLLECTION_WORKSTATIONS]
