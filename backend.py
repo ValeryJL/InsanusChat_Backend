@@ -51,12 +51,12 @@ tags_metadata = [
 ]
 
 app = FastAPI(
-    title="InsanusChat Backend",
+    title="insanus-harnes Backend",
     description=(
         "Plataforma asíncrona de Chat Ramificado en Árbol con Agentes de IA Multi-Proveedor, "
-        "Servidores MCP, Code Snippets aislados y Panel de Administración."
+        "Agent Harness distribuido, Control Plane SSOT de Workstations, Servidores MCP y Panel Admin."
     ),
-    version="1.0.0",
+    version="1.4.1",
     lifespan=lifespan,
     openapi_tags=tags_metadata,
     contact={"name": "InsanusTech Team", "email": os.environ.get("MAINTAINER_EMAIL", "valejlorda@insanustech.com.ar")},
