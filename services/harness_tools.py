@@ -59,6 +59,13 @@ class UpdatePlanArgs(BaseModel):
     )
 
 
+class GetLspDiagnosticsArgs(BaseModel):
+    path: Optional[str] = Field(
+        None,
+        description="Filtro opcional de ruta de archivo para consultar errores/warnings LSP específicos",
+    )
+
+
 async def build_workspace_context_prompt(node_id: str, workspace_path: str, harness_mode: str = "auto_edit") -> str:
     """
     HU-23: Construye el bloque de ingeniería de contexto del Workspace activo:
@@ -281,6 +288,18 @@ def build_harness_langchain_tools(
                 pass
         return json.dumps({"status": "plan_updated", "task_plan": normalized}, ensure_ascii=False)
 
+    async def _get_lsp_diagnostics(path: Optional[str] = None) -> str:
+        try:
+            res = await node_bridge.execute_on_node(
+                node_id,
+                "get_ide_diagnostics",
+                {"workspace": workspace_path, "path": path},
+                user_id=user_id,
+            )
+            return json.dumps(res, ensure_ascii=False, default=str)[:8000]
+        except Exception as e:
+            return json.dumps({"error": str(e), "diagnostics": []}, ensure_ascii=False)
+
     tools = [
         StructuredTool.from_function(
             coroutine=_list_files,
@@ -337,6 +356,13 @@ def build_harness_langchain_tools(
             description="Actualiza el checklist del plan de tareas del agente en vivo para que el usuario vea el progreso.",
             args_schema=UpdatePlanArgs,
             metadata={"harness_tool": "harness_update_plan"},
+        ),
+        StructuredTool.from_function(
+            coroutine=_get_lsp_diagnostics,
+            name="workspace_get_lsp_diagnostics",
+            description="Obtiene errores y advertencias reales del LSP (Pylance, TypeScript, ESLint, Ruff) reportados en vivo por el VS Code del workspace.",
+            args_schema=GetLspDiagnosticsArgs,
+            metadata={"harness_tool": "workspace_get_lsp_diagnostics"},
         ),
     ]
     return tools
