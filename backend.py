@@ -56,7 +56,7 @@ app = FastAPI(
         "Plataforma asíncrona de Chat Ramificado en Árbol con Agentes de IA Multi-Proveedor, "
         "Agent Harness distribuido, Control Plane SSOT de Workstations, Servidores MCP y Panel Admin."
     ),
-    version="1.4.1",
+    version="1.5.0",
     lifespan=lifespan,
     openapi_tags=tags_metadata,
     contact={"name": "InsanusTech Team", "email": os.environ.get("MAINTAINER_EMAIL", "valejlorda@insanustech.com.ar")},
@@ -121,6 +121,7 @@ app.include_router(agents.router)
 app.include_router(tools.router)
 app.include_router(chats.router)
 app.include_router(nodes.router)
+app.include_router(nodes.ide_proxy_router)
 app.include_router(admin.router)
 
 
