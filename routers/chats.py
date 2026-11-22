@@ -195,6 +195,85 @@ async def create_chat(
     return ChatResponse(message="Chat creado", data=_sanitize_chat_record(chat_doc))
 
 
+@router.post("/resolve-workspace", response_model=ResponseModel)
+async def resolve_workspace_chat(
+    body: Dict[str, Any] = Body(default_factory=dict),
+    authorization: str = Header(..., alias="Authorization"),
+):
+    """
+    v1.5.0: Resuelve la conversación activa asociada a un (node_id, workspace_path)
+    para la extensión VS Code `insanuschat-harness` y la sidebar agrupada por proyectos.
+    """
+    user = await auth.get_authenticated_user(authorization)
+    user_oid = user["_id"]
+    uid = str(user_oid)
+
+    node_id = (body.get("node_id") or "").strip() or None
+    ws_path = (body.get("workspace_path") or ".").strip() or "."
+    create_if_missing = bool(body.get("create_if_missing", True))
+    title = (body.get("title") or "").strip() or f"{ws_path if ws_path != '.' else 'Workspace'} · Agente"
+
+    chats_col = database.get_chat_collection()
+    query: Dict[str, Any] = {
+        "user_id": _user_id_query(uid),
+        "workspace_path": ws_path,
+    }
+    if node_id:
+        query["node_id"] = node_id
+
+    workspace_chats: List[Dict[str, Any]] = []
+    async for c in chats_col.find(query).sort("last_updated", -1):
+        workspace_chats.append(_sanitize_chat_record(c))
+
+    # Fallback: buscar por workspace_path en cualquier nodo del usuario si no hubo match exacto por node_id
+    if not workspace_chats and node_id:
+        async for c in chats_col.find(
+            {"user_id": _user_id_query(uid), "workspace_path": ws_path, "execution_target": "workstation"}
+        ).sort("last_updated", -1):
+            workspace_chats.append(_sanitize_chat_record(c))
+
+    created = False
+    if not workspace_chats and create_if_missing:
+        now = datetime.utcnow()
+        user_agents = user.get("agents") or []
+        default_ag = next((a for a in user_agents if a.get("active", True)), None)
+        agent_obj = default_ag.get("_id") if default_ag and default_ag.get("_id") else None
+
+        chat_doc = {
+            "user_id": user_oid,
+            "agent_id": agent_obj,
+            "title": title[:150],
+            "metadata": {"created_from": "vscode_workspace_resolver"},
+            "messages": [],
+            "message_count": 0,
+            "locked": False,
+            "locked_at": None,
+            "active_tools": [],
+            "execution_target": "workstation" if node_id else "cloud",
+            "node_id": node_id,
+            "workspace_path": ws_path,
+            "harness_mode": "auto_edit",
+            "task_plan": [],
+            "created_at": now,
+            "last_updated": now,
+        }
+        res = await chats_col.insert_one(chat_doc)
+        chat_doc["_id"] = res.inserted_id
+        sanitized = _sanitize_chat_record(chat_doc)
+        workspace_chats.append(sanitized)
+        created = True
+
+    active_chat = workspace_chats[0] if workspace_chats else None
+    return ResponseModel(
+        message="Workspace chat resuelto",
+        data={
+            "active_chat": active_chat,
+            "workspace_chats": workspace_chats,
+            "created": created,
+        },
+    )
+
+
 @router.get("/{chat_id}", response_model=ChatResponse)
 async def get_chat(chat_id: str, authorization: str = Header(..., alias="Authorization")):
     user = await auth.get_authenticated_user(authorization)
