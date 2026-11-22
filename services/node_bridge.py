@@ -4,8 +4,10 @@ y Motor de Operaciones de Workspace (Filesystem, Unified Diffs, Terminal, Git y 
 (HU-20, HU-22, HU-25, HU-26, HU-27).
 """
 import asyncio
+import base64
 from datetime import datetime
 import difflib
+import gzip
 import json
 import logging
 import os
@@ -608,8 +610,10 @@ class NodeBridgeManager:
         self.local_node_id = "local-workstation-host"
         self.local_node_name = os.environ.get("LOCAL_NODE_NAME", f"Docker-Sandbox-{platform.node() or 'Server'}")
         self.enable_builtin_host_node = os.environ.get("ENABLE_BUILTIN_HOST_NODE", "true").lower() not in ("0", "false", "no")
-        # Conexiones WebSocket de Workstations externas (Host PCs reales): node_id -> {ws, user_id, info, pending, pty_sessions}
+        # Conexiones WebSocket de Workstations externas (Host PCs reales): node_id -> {ws, user_id, info, pending, pty_sessions, ide_http_pending, ide_ws_streams}
         self.remote_nodes: Dict[str, Dict[str, Any]] = {}
+        # Sesiones activas de VS Code Remoto: session_secret -> {node_id, user_id, created_at}
+        self.ide_sessions: Dict[str, Dict[str, Any]] = {}
         # Aprobaciones Human-in-the-Loop pendientes por chat_id -> call_id -> {future, info}
         self.pending_approvals: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
@@ -935,10 +939,11 @@ class NodeBridgeManager:
             except Exception:
                 pass
 
-            # Kill-Switch remoto: si se apaga expose_to_cloud, cerrar sesiones PTY remotas
+            # Kill-Switch remoto: si se apaga expose_to_cloud, cerrar sesiones PTY y túneles IDE remotos
             if policy.get("expose_to_cloud") is False:
                 for sid in list((live_entry.get("pty_sessions") or {}).keys()):
                     await self.close_remote_pty(node_id, sid)
+                self._revoke_ide_sessions_for_node(node_id)
 
         if doc:
             return self._format_device_view(doc, is_connected and bool(policy.get("expose_to_cloud", True)))
@@ -961,6 +966,7 @@ class NodeBridgeManager:
             )
         entry = self.remote_nodes.get(node_id)
         if entry and str(entry.get("user_id")) == uid:
+            self._revoke_ide_sessions_for_node(node_id)
             try:
                 await entry["ws"].send_json({"cmd": "device_revoked", "node_id": node_id})
                 await entry["ws"].close(code=1008)
@@ -1037,6 +1043,9 @@ class NodeBridgeManager:
             "info": node_info,
             "pending": {},
             "pty_sessions": {},
+            "ide_http_pending": {},
+            "ide_http_buffers": {},
+            "ide_ws_streams": {},
         }
 
         if col is not None:
@@ -1068,8 +1077,228 @@ class NodeBridgeManager:
             "synced_extensions": (existing or {}).get("synced_extensions") or [],
         }
 
+    def _revoke_ide_sessions_for_node(self, node_id: str) -> None:
+        for sec, meta in list(self.ide_sessions.items()):
+            if meta.get("node_id") == node_id:
+                self.ide_sessions.pop(sec, None)
+        entry = self.remote_nodes.get(node_id)
+        if not entry:
+            return
+        for _, fut in list((entry.get("ide_http_pending") or {}).items()):
+            if not fut.done():
+                fut.set_exception(RuntimeError("Sesión IDE remota revocada"))
+        entry.get("ide_http_pending", {}).clear()
+        for _, q in list((entry.get("ide_ws_streams") or {}).items()):
+            try:
+                q.put_nowait({"cmd": "ide_ws_close", "reason": "node_revoked_or_offline"})
+            except Exception:
+                pass
+        entry.get("ide_ws_streams", {}).clear()
+
+    def register_ide_session(self, session_secret: str, node_id: str, user_id: str) -> None:
+        self.ide_sessions[session_secret] = {
+            "node_id": node_id,
+            "user_id": str(user_id),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+
+    def resolve_ide_session(self, session_secret: str) -> Optional[Dict[str, Any]]:
+        meta = self.ide_sessions.get(session_secret)
+        if not meta:
+            return None
+        node_id = meta.get("node_id")
+        entry = self.remote_nodes.get(node_id or "")
+        if not entry or not entry.get("ws"):
+            return None
+        info = entry.get("info") or {}
+        if info.get("expose_to_cloud") is False:
+            return None
+        return meta
+
+    def handle_remote_ide_http_res(self, node_id: str, payload: Dict[str, Any]) -> None:
+        entry = self.remote_nodes.get(node_id)
+        if not entry:
+            return
+        req_id = payload.get("req_id")
+        cmd = payload.get("cmd")
+        buffers = entry.setdefault("ide_http_buffers", {})
+
+        if cmd == "ide_http_head":
+            buffers[req_id] = {
+                "status": payload.get("status", 200),
+                "headers": payload.get("headers") or {},
+                "set_cookies": payload.get("set_cookies") or [],
+                "gzipped": bool(payload.get("gzipped")),
+                "chunks": [],
+            }
+            return
+
+        if cmd == "ide_http_chunk":
+            buf = buffers.get(req_id)
+            if buf is not None:
+                chunk_raw = base64.b64decode(payload.get("data_b64") or "") if payload.get("data_b64") else b""
+                buf["chunks"].append(chunk_raw)
+            return
+
+        if cmd == "ide_http_end":
+            buf = buffers.pop(req_id, None)
+            fut = (entry.get("ide_http_pending") or {}).pop(req_id, None)
+            if fut and not fut.done() and buf is not None:
+                raw_body = b"".join(buf["chunks"])
+                if buf.get("gzipped") and raw_body:
+                    raw_body = gzip.decompress(raw_body)
+                fut.set_result(
+                    {
+                        "status": int(buf.get("status") or 200),
+                        "headers": dict(buf.get("headers") or {}),
+                        "set_cookies": list(buf.get("set_cookies") or []),
+                        "raw_body": raw_body,
+                    }
+                )
+            return
+
+        fut = (entry.get("ide_http_pending") or {}).pop(req_id, None)
+        if fut and not fut.done():
+            raw = base64.b64decode(payload.get("body_b64") or "") if payload.get("body_b64") else b""
+            if payload.get("gzipped") and raw:
+                raw = gzip.decompress(raw)
+            fut.set_result(
+                {
+                    "status": int(payload.get("status") or 502),
+                    "headers": dict(payload.get("headers") or {}),
+                    "set_cookies": list(payload.get("set_cookies") or []),
+                    "raw_body": raw,
+                }
+            )
+
+    def handle_remote_ide_ws_event(self, node_id: str, payload: Dict[str, Any]) -> None:
+        entry = self.remote_nodes.get(node_id)
+        if not entry:
+            return
+        sid = payload.get("stream_id")
+        q = (entry.get("ide_ws_streams") or {}).get(sid)
+        if q is not None:
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                pass
+
+    async def proxy_ide_http(
+        self,
+        node_id: str,
+        user_id: str,
+        method: str,
+        session_secret: str,
+        subpath: str,
+        query: str,
+        headers: Dict[str, str],
+        body: bytes,
+        timeout: float = 45.0,
+    ) -> Dict[str, Any]:
+        entry = self.remote_nodes.get(node_id)
+        if not entry or not entry.get("ws"):
+            raise RuntimeError("El equipo no está conectado.")
+        if str(entry.get("user_id")) != str(user_id):
+            raise PermissionError("No autorizado para acceder al IDE de este nodo.")
+        if (entry.get("info") or {}).get("expose_to_cloud") is False:
+            raise PermissionError("Control Remoto desactivado en este Workstation.")
+
+        req_id = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        entry.setdefault("ide_http_pending", {})[req_id] = fut
+
+        await entry["ws"].send_json(
+            {
+                "cmd": "ide_http_req",
+                "req_id": req_id,
+                "method": method,
+                "session_secret": session_secret,
+                "subpath": subpath,
+                "query": query,
+                "headers": headers,
+                "body_b64": base64.b64encode(body).decode("ascii") if body else "",
+            }
+        )
+        res = await asyncio.wait_for(fut, timeout=timeout)
+        raw = res.get("raw_body")
+        if raw is None:
+            raw = base64.b64decode(res.get("body_b64") or "") if res.get("body_b64") else b""
+        return {
+            "status": int(res.get("status") or 502),
+            "headers": dict(res.get("headers") or {}),
+            "set_cookies": list(res.get("set_cookies") or []),
+            "body": raw,
+        }
+
+    async def open_remote_ide_ws(
+        self,
+        node_id: str,
+        user_id: str,
+        stream_id: str,
+        session_secret: str,
+        subpath: str,
+        query: str,
+        subprotocols: Optional[List[str]] = None,
+    ) -> asyncio.Queue:
+        entry = self.remote_nodes.get(node_id)
+        if not entry or not entry.get("ws"):
+            raise RuntimeError("El equipo no está conectado.")
+        if str(entry.get("user_id")) != str(user_id):
+            raise PermissionError("No autorizado para acceder al IDE WS de este nodo.")
+        if (entry.get("info") or {}).get("expose_to_cloud") is False:
+            raise PermissionError("Control Remoto desactivado.")
+
+        q: asyncio.Queue = asyncio.Queue()
+        entry.setdefault("ide_ws_streams", {})[stream_id] = q
+        await entry["ws"].send_json(
+            {
+                "cmd": "ide_ws_open",
+                "stream_id": stream_id,
+                "session_secret": session_secret,
+                "subpath": subpath,
+                "query": query,
+                "subprotocols": subprotocols or [],
+            }
+        )
+        return q
+
+    async def send_remote_ide_ws_frame(self, node_id: str, stream_id: str, data: Any, is_binary: bool) -> None:
+        entry = self.remote_nodes.get(node_id)
+        if entry and entry.get("ws"):
+            encoded = base64.b64encode(data).decode("ascii") if is_binary else str(data)
+            await entry["ws"].send_json(
+                {
+                    "cmd": "ide_ws_frame",
+                    "stream_id": stream_id,
+                    "is_binary": is_binary,
+                    "data": encoded,
+                }
+            )
+
+    async def close_remote_ide_ws(self, node_id: str, stream_id: str) -> None:
+        entry = self.remote_nodes.get(node_id)
+        if entry:
+            (entry.get("ide_ws_streams") or {}).pop(stream_id, None)
+            if entry.get("ws"):
+                try:
+                    await entry["ws"].send_json({"cmd": "ide_ws_close", "stream_id": stream_id})
+                except Exception:
+                    pass
+
     def unregister_remote_ws(self, node_id: str):
+        # No revocamos self.ide_sessions ante un microcorte de red para permitir reconexión transparente
+        # (sí se revoca explícitamente en Kill-Switch expose_to_cloud=False y en revoke_device).
         entry = self.remote_nodes.pop(node_id, None)
+        if entry:
+            for _, fut in list((entry.get("ide_http_pending") or {}).items()):
+                if not fut.done():
+                    fut.set_exception(RuntimeError("El equipo de ejecución se desconectó"))
+            for _, q in list((entry.get("ide_ws_streams") or {}).items()):
+                try:
+                    q.put_nowait({"cmd": "ide_ws_close", "reason": "node_disconnected"})
+                except Exception:
+                    pass
         if entry and entry.get("pending"):
             for _, fut in entry["pending"].items():
                 if not fut.done():
@@ -1199,6 +1428,10 @@ class NodeBridgeManager:
             "list_workspaces",
             "set_privacy",
             "list_extensions",
+            "ide_status",
+            "ide_ensure_started",
+            "ide_open_file",
+            "get_ide_diagnostics",
         ):
             raise PermissionError(
                 "Las herramientas remotas de archivos/agente están deshabilitadas en las políticas de este Workstation."

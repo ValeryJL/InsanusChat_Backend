@@ -3,12 +3,18 @@ Router de Equipos de Ejecución (Workstation Nodes), Túnel RPC WebSocket y API 
 para el Editor de Código VS Code (HU-20, HU-24, HU-27).
 """
 import asyncio
+import base64
+import hashlib
+import hmac
 import logging
+import os
 import platform
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 import uuid
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import JSONResponse, RedirectResponse
 import httpx
 
 from models import ResponseModel, WorkstationPolicyPatchRequest, WorkstationRegisterRequest
@@ -19,6 +25,34 @@ from services.pty_manager import InteractivePtySession
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/nodes", tags=["Equipos de Ejecución (Harness Nodes)"])
+ide_proxy_router = APIRouter(tags=["VS Code Remoto Embebido"])
+
+IDE_COOKIE_NAME = "insanus_remote_ide"
+
+
+def _ide_signing_key() -> bytes:
+    return (os.environ.get("LOCAL_AUTH_SECRET") or "insanuschat-local-dev-jwt-secret-key-2026-secure").encode("utf-8")
+
+
+def _sign_ide_cookie(user_id: str, node_id: str, session_secret: str) -> str:
+    payload = f"{user_id}|{node_id}|{session_secret}"
+    sig = hmac.new(_ide_signing_key(), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}|{sig}"
+
+
+def _verify_ide_cookie(cookie_val: Optional[str], expected_secret: str) -> Optional[Dict[str, str]]:
+    if not cookie_val:
+        return None
+    parts = cookie_val.split("|")
+    if len(parts) != 4:
+        return None
+    uid, nid, sec, sig = parts
+    if sec != expected_secret:
+        return None
+    expected_sig = hmac.new(_ide_signing_key(), f"{uid}|{nid}|{sec}".encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected_sig):
+        return None
+    return {"user_id": uid, "node_id": nid, "session_secret": sec}
 
 
 @router.get("/", response_model=ResponseModel)
@@ -840,6 +874,10 @@ async def workstation_node_tunnel_ws(websocket: WebSocket):
                 node_bridge.handle_remote_rpc_response(node_id, payload)
             elif cmd in ("pty_output", "pty_exit"):
                 node_bridge.handle_remote_pty_event(node_id, payload)
+            elif cmd in ("ide_http_res", "ide_http_head", "ide_http_chunk", "ide_http_end"):
+                node_bridge.handle_remote_ide_http_res(node_id, payload)
+            elif cmd in ("ide_ws_opened", "ide_ws_frame", "ide_ws_close"):
+                node_bridge.handle_remote_ide_ws_event(node_id, payload)
             elif cmd == "heartbeat":
                 if node_id in node_bridge.remote_nodes:
                     info = node_bridge.remote_nodes[node_id]["info"]
@@ -857,3 +895,241 @@ async def workstation_node_tunnel_ws(websocket: WebSocket):
     except Exception as e:
         logger.debug("Desconexión en túnel de nodo %s: %s", node_id, e)
         node_bridge.unregister_remote_ws(node_id)
+
+
+# ---------------------------------------------------------------------------
+# v1.5.0: Sesión y Reverse Proxy Multiplexado para VS Code Real Remoto (/ide/*)
+# ---------------------------------------------------------------------------
+@router.post("/{node_id}/ide/session", response_model=ResponseModel)
+async def create_remote_ide_session(
+    node_id: str,
+    response: Response,
+    body: Dict[str, Any] = Body(default_factory=dict),
+    authorization: str = Header(..., alias="Authorization"),
+):
+    """Inicia el motor VS Code en el Workstation remoto y emite cookie HttpOnly firmada para /ide/{secret}/*."""
+    user = await auth.get_authenticated_user(authorization)
+    uid = str(user["_id"])
+    workspace = str(body.get("workspace") or ".")
+
+    entry = node_bridge.remote_nodes.get(node_id)
+    if not entry or not entry.get("ws"):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="El Workstation remoto no está conectado.")
+    if str(entry.get("user_id")) != uid:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenés permiso para acceder a este equipo.")
+    if (entry.get("info") or {}).get("expose_to_cloud") is False:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="El Control Remoto está apagado (Solo Local) en este Workstation.",
+        )
+
+    try:
+        res = await node_bridge.execute_on_node(
+            node_id,
+            "ide_ensure_started",
+            {"workspace": workspace},
+            timeout=30.0,
+            user_id=uid,
+        )
+    except PermissionError as pe:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+
+    session_secret = str((res or {}).get("session_secret") or "")
+    folder_path = str((res or {}).get("folder_path") or "")
+    if not session_secret:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="El Workstation no devolvió session_secret del IDE.")
+
+    node_bridge.register_ide_session(session_secret, node_id, uid)
+    signed = _sign_ide_cookie(uid, node_id, session_secret)
+    response.set_cookie(
+        key=IDE_COOKIE_NAME,
+        value=signed,
+        path="/ide",
+        httponly=True,
+        samesite="lax",
+    )
+    ide_url = f"/ide/{session_secret}/?folder={quote(folder_path, safe='/:')}&insanus_embedded=1"
+    return ResponseModel(
+        message="Sesión IDE remota lista",
+        data={
+            "ide_url": ide_url,
+            "engine": (res or {}).get("engine"),
+            "folder_path": folder_path,
+            "session_secret": session_secret,
+        },
+    )
+
+
+@router.post("/{node_id}/ide/open-file", response_model=ResponseModel)
+async def open_file_in_remote_ide(
+    node_id: str,
+    body: Dict[str, Any] = Body(...),
+    authorization: str = Header(..., alias="Authorization"),
+):
+    user = await auth.get_authenticated_user(authorization)
+    uid = str(user["_id"])
+    try:
+        res = await node_bridge.execute_on_node(
+            node_id,
+            "ide_open_file",
+            {
+                "workspace": body.get("workspace") or ".",
+                "path": body.get("path") or "",
+                "line": body.get("line"),
+            },
+            user_id=uid,
+        )
+        return ResponseModel(message="Comando enviado al IDE", data=res)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/{node_id}/ide/diagnostics", response_model=ResponseModel)
+async def get_remote_ide_diagnostics(
+    node_id: str,
+    workspace: str = Query("."),
+    path: Optional[str] = Query(None),
+    authorization: str = Header(..., alias="Authorization"),
+):
+    user = await auth.get_authenticated_user(authorization)
+    uid = str(user["_id"])
+    try:
+        res = await node_bridge.execute_on_node(
+            node_id,
+            "get_ide_diagnostics",
+            {"workspace": workspace, "path": path},
+            user_id=uid,
+        )
+        return ResponseModel(message="Diagnósticos LSP obtenidos", data=res)
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@ide_proxy_router.api_route(
+    "/ide/{session_secret}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+async def remote_ide_proxy_root(request: Request, session_secret: str):
+    if not request.url.path.endswith("/"):
+        qs = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"/ide/{session_secret}/{qs}", status_code=307)
+    return await _proxy_remote_ide_http(request, session_secret, "")
+
+
+@ide_proxy_router.api_route(
+    "/ide/{session_secret}/{subpath:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+async def remote_ide_proxy_subpath(request: Request, session_secret: str, subpath: str):
+    return await _proxy_remote_ide_http(request, session_secret, subpath)
+
+
+async def _proxy_remote_ide_http(request: Request, session_secret: str, subpath: str) -> Response:
+    verified = _verify_ide_cookie(request.cookies.get(IDE_COOKIE_NAME), session_secret)
+    meta = node_bridge.resolve_ide_session(session_secret)
+    if not verified or not meta or verified["node_id"] != meta["node_id"] or verified["user_id"] != meta["user_id"]:
+        return JSONResponse(status_code=401, content={"detail": "Sesión IDE remota no autorizada o revocada"})
+
+    try:
+        body = await request.body()
+        res = await node_bridge.proxy_ide_http(
+            node_id=meta["node_id"],
+            user_id=meta["user_id"],
+            method=request.method,
+            session_secret=session_secret,
+            subpath=subpath,
+            query=request.url.query,
+            headers=dict(request.headers),
+            body=body,
+        )
+        out = Response(content=res["body"], status_code=res["status"], headers=res["headers"])
+        for ck in res.get("set_cookies") or []:
+            out.headers.append("set-cookie", ck)
+        return out
+    except PermissionError as pe:
+        return JSONResponse(status_code=403, content={"detail": str(pe)})
+    except Exception as e:
+        return JSONResponse(status_code=502, content={"detail": f"Error en túnel IDE remoto: {e}"})
+
+
+@ide_proxy_router.websocket("/ide/{session_secret}")
+async def remote_ide_proxy_ws_root(websocket: WebSocket, session_secret: str):
+    await _proxy_remote_ide_ws(websocket, session_secret, "")
+
+
+@ide_proxy_router.websocket("/ide/{session_secret}/{subpath:path}")
+async def remote_ide_proxy_ws_subpath(websocket: WebSocket, session_secret: str, subpath: str):
+    await _proxy_remote_ide_ws(websocket, session_secret, subpath)
+
+
+async def _proxy_remote_ide_ws(websocket: WebSocket, session_secret: str, subpath: str) -> None:
+    verified = _verify_ide_cookie(websocket.cookies.get(IDE_COOKIE_NAME), session_secret)
+    meta = node_bridge.resolve_ide_session(session_secret)
+    if not verified or not meta or verified["node_id"] != meta["node_id"] or verified["user_id"] != meta["user_id"]:
+        await websocket.close(code=1008)
+        return
+
+    node_id = meta["node_id"]
+    uid = meta["user_id"]
+    stream_id = uuid.uuid4().hex
+    subprotocols_hdr = websocket.headers.get("sec-websocket-protocol")
+    subprotocols = [s.strip() for s in subprotocols_hdr.split(",") if s.strip()] if subprotocols_hdr else []
+
+    try:
+        q = await node_bridge.open_remote_ide_ws(
+            node_id=node_id,
+            user_id=uid,
+            stream_id=stream_id,
+            session_secret=session_secret,
+            subpath=subpath,
+            query=websocket.url.query,
+            subprotocols=subprotocols,
+        )
+        first = await asyncio.wait_for(q.get(), timeout=15.0)
+        if first.get("cmd") != "ide_ws_opened":
+            await websocket.close(code=1011)
+            return
+        await websocket.accept(subprotocol=first.get("subprotocol"))
+
+        async def browser_to_node():
+            try:
+                while True:
+                    msg = await websocket.receive()
+                    if msg.get("type") == "websocket.disconnect":
+                        break
+                    if msg.get("text") is not None:
+                        await node_bridge.send_remote_ide_ws_frame(node_id, stream_id, msg["text"], False)
+                    elif msg.get("bytes") is not None:
+                        await node_bridge.send_remote_ide_ws_frame(node_id, stream_id, msg["bytes"], True)
+            except (WebSocketDisconnect, Exception):
+                pass
+
+        async def node_to_browser():
+            try:
+                while True:
+                    ev = await q.get()
+                    c = ev.get("cmd")
+                    if c == "ide_ws_close":
+                        break
+                    if c == "ide_ws_frame":
+                        if ev.get("is_binary"):
+                            await websocket.send_bytes(base64.b64decode(ev.get("data") or ""))
+                        else:
+                            await websocket.send_text(str(ev.get("data") or ""))
+            except Exception:
+                pass
+
+        t1 = asyncio.create_task(browser_to_node())
+        t2 = asyncio.create_task(node_to_browser())
+        _, pending = await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
+        for p in pending:
+            p.cancel()
+    except Exception:
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+    finally:
+        await node_bridge.close_remote_ide_ws(node_id, stream_id)
